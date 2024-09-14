@@ -1,5 +1,7 @@
 #![no_std]
-#![no_main]
+#![no_main] 
+
+mod multiboot2_header; 
 
 use core::panic::PanicInfo;
 

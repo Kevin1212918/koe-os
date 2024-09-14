@@ -1,1 +1,0 @@
-section .multiboot_header
