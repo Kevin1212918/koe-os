@@ -3,8 +3,8 @@ ENTRY(_start)
 SECTIONS {
     . = 2M;
 
-    .boot : {
-		KEEP(*(.multiboot2_header))
+    .bootstrap : {
+		KEEP(*(.bootstrap.multiboot2_header))
     }
 
     .text : {

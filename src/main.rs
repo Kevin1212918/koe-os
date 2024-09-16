@@ -1,12 +1,10 @@
 #![no_std]
 #![no_main] 
 
-mod multiboot2_header; 
+mod bootstrap; 
 mod drivers;
 
 use core::{arch::global_asm, panic::PanicInfo};
-
-global_asm!(include_str!("boot.S"));
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
