@@ -1,5 +1,4 @@
 koe-os.iso: src/*
-	cargo clean
 	rm -rf iso
 	rm -f koe-os.iso
 
