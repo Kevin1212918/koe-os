@@ -1,32 +1,33 @@
 .code32
+.set _kernel_start_vma, 0xFFFF800000000000
 
 .section .rodata
 .align 64
 gdt:
-.quad 0
-.set gdt_code, . - gdt
-.quad (1<<43) | (1<<44) | (1<<47) | (1<<53) /* Code Segment */
+    .quad 0
+    .set gdt_code, . - gdt
+    .quad (1<<43) | (1<<44) | (1<<47) | (1<<53) /* Code Segment */
 gdt_ptr:
-.word . - gdt - 1
-.quad gdt
+    .word . - gdt - 1
+    .quad gdt
+
+.section .bootstrap.bss, "aw", @nobits
+.align 4096
+pg_ml4_table:
+    .skip 4096
+pg_dir_ptr_table:
+    .skip 4096
+pg_dir_table:
+    .skip 4096
 
 .section .bss
 .align 4096
-pg_ml4_table:
-.skip 4096
-pg_dir_ptr_table:
-.skip 4096
-pg_dir_table:
-.skip 4096
-
-.align 4096
 stack_bottom:
-.skip 16384 # 16 KiB
+    .skip 16384 # 16 KiB
 stack_top:
 
-.section .text
+.section .bootstrap.text, "a"
 .global _start
-.code32
 _start: 
     
     /* Check if loaded by multiboot2 compliant bootloader */
@@ -34,7 +35,8 @@ _start:
     jne _start_no_multiboot2_err
     
     /* Load stack address into registers */
-    lea esp, stack_top
+    .set stack_top_lma, stack_top - _kernel_start_vma
+    lea esp, stack_top_lma
     push 0
 
 _check_cpuid:
@@ -127,9 +129,9 @@ _enable_paging:
     mov cr0, eax
 
     /* Call rust kernel entry point */
-    mov eax, [gdt_ptr]
-    lgdt [gdt_ptr]
-    ljmp 0x8, offset _start_long_mode
+    /* .set gdt_ptr_lma, gdt_ptr - _kernel_start_vma */
+    /* lgdt [gdt_ptr_lma] */
+    ljmp offset gdt_code, offset _start_long_mode
 
 
 _start_no_long_mode_err:

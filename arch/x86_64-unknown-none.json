@@ -15,6 +15,7 @@
         ]
     },
     "relocation-model": "static",
+    "code-model": "kernel",
     "panic-strategy": "abort",
     "disable-redzone": true,
     "features": "-mmx,-sse,+soft-float"
