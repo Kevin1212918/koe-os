@@ -9,5 +9,5 @@ koe-os.iso: src/*
 	cp src/grub.cfg iso/boot/grub
 	cp target/x86_64-unknown-none/debug/koe-os iso/boot
 
-	grub-mkrescue -o koe-os.iso iso
+	grub-mkrescue -o koe-os.iso iso || grub2-mkrescue -o koe-os.iso iso
 	rm -rf iso
