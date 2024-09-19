@@ -1,7 +1,7 @@
 .code32
-.set _kernel_start_vma, 0xFFFF800000000000
+.set _kernel_vma_offset, 0xFFFFFFFF80000000
 
-.section .rodata
+.section .bootstrap.data, "a", @progbits
 .align 64
 gdt:
     .quad 0
@@ -26,7 +26,7 @@ stack_bottom:
     .skip 16384 # 16 KiB
 stack_top:
 
-.section .bootstrap.text, "a"
+.section .bootstrap.text, "ax"
 .global _start
 _start: 
     
@@ -35,7 +35,7 @@ _start:
     jne _start_no_multiboot2_err
     
     /* Load stack address into registers */
-    .set stack_top_lma, stack_top - _kernel_start_vma
+    .set stack_top_lma, stack_top - _kernel_vma_offset
     lea esp, stack_top_lma
     push 0
 
@@ -93,10 +93,20 @@ _enable_paging:
     or eax, 0b11
     mov [pg_ml4_table], eax
 
+    /* Set last entry of pml4 */
+    lea eax, pg_dir_ptr_table 
+    or eax, 0b11
+    mov [offset pg_ml4_table + 511 * 8], eax
+
     /* Set first entry of page directory ptr table*/
     lea eax, pg_dir_table
     or eax, 0b11
     mov [pg_dir_ptr_table], eax
+    
+    /* Set 511th entry of page directory ptr table*/
+    lea eax, pg_dir_table
+    or eax, 0b11
+    mov [offset pg_dir_ptr_table + 510 * 8], eax
 
     /* Set first entry of page directory table */
     mov eax, 0 
@@ -107,11 +117,21 @@ _enable_paging:
     mov eax, 0x200000
     or eax, 0b10000011
     mov [pg_dir_table + 8], eax
+    
+    /* Set third entry of page directory table */
+    mov eax, 0x400000
+    or eax, 0b10000011
+    mov [pg_dir_table + 16], eax
+
+    /* Set fourth entry of page directory table */
+    mov eax, 0x600000
+    or eax, 0b10000011
+    mov [pg_dir_table + 24], eax
 
     /* Set up CR3 */
     lea eax, pg_ml4_table
     mov cr3, eax
-    
+
     /* Set up PAE */
     mov eax, cr4
     or eax, 0b100000
@@ -129,8 +149,7 @@ _enable_paging:
     mov cr0, eax
 
     /* Call rust kernel entry point */
-    /* .set gdt_ptr_lma, gdt_ptr - _kernel_start_vma */
-    /* lgdt [gdt_ptr_lma] */
+    lgdt [gdt_ptr]
     ljmp offset gdt_code, offset _start_long_mode
 
 
@@ -151,8 +170,13 @@ _start_err:
     hlt
 
 .code64
+.extern kmain
 _start_long_mode:
-    call kmain
-
-
-    
+    lea rsp, stack_top
+    mov ax, 0
+    mov ss, ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    jmp kmain

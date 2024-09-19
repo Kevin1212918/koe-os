@@ -4,7 +4,7 @@
 mod bootstrap; 
 mod drivers;
 
-use core::{arch::global_asm, panic::PanicInfo};
+use core::{arch::asm, panic::PanicInfo};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
