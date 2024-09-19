@@ -1,0 +1,1 @@
+pub const _KERNEL_START_VMA: usize = 0xFFFFFFFF80000000;
