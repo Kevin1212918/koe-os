@@ -16,12 +16,12 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn kmain() -> ! {
     use drivers::vga::*;
 
-    let mut vga_buffer = unsafe { VGABuffer::init() };
-        
+    let mut vga_buffer = VGA_BUFFER.lock();
     vga_buffer.set_color(Color::Gray, Color::Black, true);
     vga_buffer.write(b"Hello World! ");
     vga_buffer.set_color(Color::Green, Color::Black, true);
     vga_buffer.write(b"Hello again, World!");
+    drop(vga_buffer);
 
     loop {}
 }

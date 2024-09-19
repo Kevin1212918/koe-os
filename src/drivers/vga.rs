@@ -14,6 +14,10 @@ const VIEW_HEIGHT: u8 = 25;
 /// Width of terminal
 const VIEW_WIDTH: u8 = 80;
 
+pub static VGA_BUFFER: spin::Lazy<spin::Mutex<VGABuffer>> = spin::Lazy::new(|| {
+    spin::Mutex::new(unsafe { VGABuffer::init() })
+});
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {
