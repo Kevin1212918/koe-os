@@ -1,4 +1,3 @@
-[ ] Spinlock
 [ ] Paging
 [ ] IRQ
 [ ] Scheduler

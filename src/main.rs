@@ -1,11 +1,15 @@
 #![no_std]
 #![no_main] 
+#![feature(const_refs_to_static)]
 
 mod common;
 mod bootstrap; 
 mod drivers;
+mod mem;
 
 use core::panic::PanicInfo;
+
+use mem::{kernel_offset_vma, kernel_start_lma, kernel_start_vma};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {

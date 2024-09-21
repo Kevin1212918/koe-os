@@ -1,9 +1,9 @@
 use core::cell::LazyCell;
 
-use crate::common::_KERNEL_START_VMA;
+use crate::mem::{kernel_offset_vma};
 
 /// Address of start of VGA MMIO
-const BUFFER: usize = _KERNEL_START_VMA + 0xb8000;
+const BUFFER: usize = kernel_offset_vma() + 0xb8000;
 
 /// Length of VGA buffer in bytes
 const BUFFER_LEN: usize = 0x8000; // 32 KiB
@@ -43,7 +43,7 @@ impl VGABuffer {
     /// 
     /// # Safety
     /// 
-    /// Since VGABuffer manages the MMIO of VGA graphics, there should be only one VGABuffer in the kernel.
+    /// Since VGABuffer manages the MMIO of VGA graphics, there should be only one VGABuffer in existence.
     pub unsafe fn init() -> Self {
         use Color::*;
 

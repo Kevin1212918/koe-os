@@ -1,5 +1,5 @@
 .code32
-.set _kernel_vma_offset, 0xFFFFFFFF80000000
+.set _KERNEL_OFFSET_VMA, 0xFFFFFFFF80000000
 
 .section .bootstrap.data, "a", @progbits
 .align 64
@@ -35,7 +35,7 @@ _start:
     jne _start_no_multiboot2_err
     
     /* Load stack address into registers */
-    .set stack_top_lma, stack_top - _kernel_vma_offset
+    .set stack_top_lma, stack_top - _KERNEL_OFFSET_VMA
     lea esp, stack_top_lma
     push 0
 
