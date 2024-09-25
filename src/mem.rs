@@ -1,4 +1,7 @@
-mod physical;
+use derive_more::derive::{From, Into};
+
+mod phy;
+mod virt;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
@@ -30,10 +33,13 @@ pub fn kernel_start_lma() -> usize {
     }
 }
 #[inline]
-pub fn kernel_end_lma() -> usize{
+pub fn kernel_end_lma() -> usize {
     kernel_start_lma() + (kernel_end_vma() - kernel_start_vma())
+}
+#[inline]
+pub fn kernel_size() -> usize {
+    kernel_end_vma() - kernel_start_vma()
 }
 
 pub const USER_START_VMA: usize = 0x0000000000000000;
 pub const USER_START_PMA: usize = 0x400000;
-

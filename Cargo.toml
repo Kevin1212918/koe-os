@@ -10,6 +10,9 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
+bitvec = { version = "1.0.1", default-features = false }
+derive_more = { version = "1.0.0", default-features = false, features = ["full"]}
+multiboot2 = { version = "0.23.0", default-features = false }
 spin = "0.9.8"
 
 

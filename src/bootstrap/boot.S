@@ -33,11 +33,10 @@ _start:
     /* Check if loaded by multiboot2 compliant bootloader */
     cmp eax, 0x36d76289
     jne _start_no_multiboot2_err
-    
+
     /* Load stack address into registers */
     .set stack_top_lma, stack_top - _KERNEL_OFFSET_VMA
     lea esp, stack_top_lma
-    push 0
 
 _check_cpuid:
 
@@ -75,6 +74,8 @@ _check_cpuid:
     
 
 _check_long_mode:
+    /* preserve ebx*/
+    push ebx
     /* test if extended processor info in available */
     mov eax, 0x80000000    /* implicit argument for cpuid */
     cpuid                  /* get highest supported argument */
@@ -86,6 +87,8 @@ _check_long_mode:
     cpuid                  /* various feature bits in ecx and edx */
     test edx, 1 << 29      /* if the LM-bit is set in the D-register */
     jz _start_no_long_mode_err       /* it's not set, there is no long mode */
+
+    pop ebx
     
 _enable_paging:
     /* Set first entry of pml4 */
@@ -179,4 +182,7 @@ _start_long_mode:
     mov es, ax
     mov fs, ax
     mov gs, ax
+
+    /* Move Multiboot2 boot information pointer to function arg 1 */
+    mov edi, ebx
     jmp kmain

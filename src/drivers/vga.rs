@@ -1,4 +1,4 @@
-use core::cell::LazyCell;
+use core::{cell::LazyCell, fmt::Write};
 
 use crate::mem::{kernel_offset_vma};
 
@@ -79,15 +79,34 @@ impl VGABuffer {
         (VIEW_WIDTH as u8, VIEW_HEIGHT as u8)
     }
     pub fn write_u8(&mut self, char: u8) {
-        if self.cursor_pos != VIEW_HEIGHT as u16 * VIEW_WIDTH as u16 {
-            self.buffer[self.cursor_pos as usize] = vga_entry(self.color_code, char);
-            self.cursor_pos += 1;
+        if self.cursor_pos == VIEW_HEIGHT as u16 * VIEW_WIDTH as u16 {
+            return;
         }
+
+        match char {
+            b'\n' => {
+                self.cursor_pos = self.cursor_pos.next_multiple_of(VIEW_WIDTH as u16);
+            }
+            _ => {
+                self.buffer[self.cursor_pos as usize] = vga_entry(self.color_code, char);
+                self.cursor_pos += 1;
+            }
+        }
+
     }
     pub fn write(&mut self, text: &[u8]) {
         for &char in text {
             self.write_u8(char);
         }
+    }
+}
+
+impl Write for VGABuffer {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &c in s.as_bytes() {
+            self.write_u8(c);
+        }
+        Ok(())
     }
 }
 
