@@ -4,6 +4,15 @@ use core::arch::asm;
 
 use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 
+use super::{phy::PAddr, virt::VAddr};
+
+
+pub trait PageMap {
+    fn set(&mut self, vaddr: VAddr, paddr: PAddr);
+}
+
+//---------------------------- x86-64 stuff below ---------------------------//
+
 fn cr3() -> PageEntry {
     let out: usize;
     unsafe {
@@ -11,6 +20,7 @@ fn cr3() -> PageEntry {
     }
     PageEntry(out)
 }
+
 /// A paging structure entry.
 #[repr(transparent)]
 pub struct PageEntry(usize);
@@ -18,7 +28,7 @@ impl PageEntry {
     fn is_present(&self, structure: PageStructure) -> bool {
         self.get_flag(structure, PageFlag::Present).unwrap_or(true)
     }
-    fn get_addr(&self, structure: PageStructure) -> Option<usize> {
+    fn get_ref_info(&self, structure: PageStructure) -> Option<(usize)> {
         use PageStructure::*;
 
         if !self.is_present(structure) {
