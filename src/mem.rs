@@ -2,6 +2,8 @@ use derive_more::derive::{From, Into};
 
 mod phy;
 mod virt;
+mod alloc;
+mod page;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 

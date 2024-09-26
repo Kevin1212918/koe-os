@@ -1,0 +1,103 @@
+//! x86-64 4 level ordinary paging
+
+use bitvec::{array::BitArray, order::Lsb0, view::BitView};
+
+/// A paging structure entry.
+#[repr(transparent)]
+pub struct PageEntry(usize);
+impl PageEntry {
+    fn is_present(&self, structure: PageStructure) -> bool {
+        self.get_flag(structure, PageFlag::Present).unwrap_or(true)
+    }
+    fn get_addr(&self, structure: PageStructure) -> usize {
+        use PageStructure::*;
+
+        let is_page = *(unsafe { self.0.view_bits::<Lsb0>().get_unchecked(7) });
+        match (structure, is_page) {
+            (CR3, _) |
+            ()
+        }
+        
+    }
+    /// Intepret the `PageEntry` as an entry in the `structure`, and try to
+    /// find index of `flag` within the entry.
+    /// 
+    /// On success, returns the index of `flag`. Fails when such flag 
+    /// cannot be found in the entry.
+    fn get_flag_idx(&self, structure: PageStructure, flag: PageFlag) -> Option<usize> {
+        use PageFlag::*;
+        use PageStructure::*;
+        
+        // SAFETY: 7 is less than size of usize
+        let is_page = *(unsafe { self.0.view_bits::<Lsb0>().get_unchecked(7) });
+        match (structure, is_page, flag) {
+            (CR3, _, WriteThru) => Some(3),
+            (CR3, _, CacheDisable) => Some(4),
+            (CR3, _, _) => None,
+
+            (_, _, Present) => Some(0),
+            (_, _, ReadWrite) => Some(1),
+            (_, _, UserSuper) => Some(2),
+            (_, _, WriteThru) => Some(3),
+            (_, _, CacheDisable) => Some(4),
+            (_, _, Accessed) => Some(5),
+
+            (PD, _, PageSize) |
+            (PDPT, _, PageSize) => Some(7),
+
+            (PT, _, Dirty) |
+            (PD, true, Dirty) |
+            (PDPT, true, Dirty) => Some(6),
+            
+            (PT, _, PageAttrTbl) => Some(7),
+            (PD, true, PageAttrTbl) |
+            (PDPT, true, PageAttrTbl) => Some(12),
+
+            (PT, _, Global) |
+            (PD, true, Global) |
+            (PDPT, true, Global) => Some(8),
+
+            _ => None
+        }
+    }
+    fn get_flag(&self, structure: PageStructure, flag: PageFlag) -> Option<bool> {
+        let idx = self.get_flag_idx(structure, flag)?;
+        let bitfield = self.0.view_bits::<Lsb0>();
+
+        Some(unsafe { *(bitfield.get_unchecked(idx)) })
+
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PageFlag {
+    // Universal flags
+    Present,
+    ReadWrite,
+    UserSuper,
+    WriteThru,
+    CacheDisable,
+    Accessed,
+    
+    // Table/Page
+    PageSize,
+
+    // Page flags
+    Dirty,
+    PageAttrTbl,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PageStructure {
+    /// Control Register 3
+    CR3,
+    /// Page Table
+    PT,
+    /// Page Directory
+    PD,
+    /// Page Directory Pointer Table
+    PDPT,
+    /// Page Map Level 4
+    PML4,
+}
