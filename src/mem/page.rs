@@ -7,18 +7,66 @@ use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 use super::{phy::PAddr, virt::VAddr};
 
 
-pub trait PageMap {
-    fn set(&mut self, vaddr: VAddr, paddr: PAddr);
+pub trait PageMapper {
+    type PageSize: Ord;
+    /// Returns an iterator which yields all supported page sizes in the order
+    /// of smallest to largest
+    fn supported_page_sizes() -> impl Iterator<Item = Self::PageSize>;
+    fn is_supported(page_size: Self::PageSize) -> bool {
+        Self::supported_page_sizes().any(|x|x == page_size)
+    }
+
+    /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any 
+    /// previous virtual page mapping at `vaddr`. This invalidates the 
+    /// virtual memory page of size `page_size` pointed by `vaddr`.
+    /// 
+    /// # Safety
+    /// - Virtual memory page of size `page_size` pointed by `vaddr` does not 
+    /// contain any live reference or owned values.
+    /// - Physical memory page of size `page_size` pointed by `paddr` does not 
+    /// contain any live reference or owned values.
+    /// 
+    /// # Panics
+    /// - `page_size` should be supported by the `PageMap`
+    unsafe fn map(&mut self, vaddr: VAddr, paddr: PAddr, page_size: Self::PageSize);
+
+    /// Removes mapping at `vaddr`.
+    /// 
+    /// # Safety
+    /// - Virtual memory page of size `page_size` pointed by `vaddr` does not 
+    /// contain any live reference or owned values.
+    unsafe fn unmap(&mut self, vaddr: VAddr);
+
+    /// Try translating a virtual address into a physical address. Fails iff 
+    /// the virtual address is not mapped.
+    fn translate(&self, vaddr: VAddr) -> Option<PAddr>;
 }
 
 //---------------------------- x86-64 stuff below ---------------------------//
 
-fn cr3() -> PageEntry {
+pub struct PageMap();
+impl PageMapper for PageMap {
+    type PageSize = usize;
+    fn supported_page_sizes() -> impl Iterator<Item = Self::PageSize> {
+        [4096].into_iter()
+    }
+    unsafe fn map(&mut self, vaddr: VAddr, paddr: PAddr, page_size: Self::PageSize) {
+        
+    }
+
+}
+
+fn get_cr3() -> PageEntry {
     let out: usize;
     unsafe {
         asm!("mov {}, cr3", out(reg) out);
     }
     PageEntry(out)
+}
+unsafe fn set_cr3(ent: usize) {
+    unsafe {
+        asm!("mov cr3, {}", in(reg) ent);
+    }
 }
 
 /// A paging structure entry.
@@ -28,7 +76,7 @@ impl PageEntry {
     fn is_present(&self, structure: PageStructure) -> bool {
         self.get_flag(structure, PageFlag::Present).unwrap_or(true)
     }
-    fn get_ref_info(&self, structure: PageStructure) -> Option<(usize)> {
+    fn get_ref_info(&self, structure: PageStructure) -> Option<usize> {
         use PageStructure::*;
 
         if !self.is_present(structure) {
