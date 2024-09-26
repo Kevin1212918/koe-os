@@ -1,7 +1,16 @@
 //! x86-64 4 level ordinary paging
 
+use core::arch::asm;
+
 use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 
+fn cr3() -> PageEntry {
+    let out: usize;
+    unsafe {
+        asm!("mov {}, cr3", out(reg) out);
+    }
+    PageEntry(out)
+}
 /// A paging structure entry.
 #[repr(transparent)]
 pub struct PageEntry(usize);
@@ -9,15 +18,24 @@ impl PageEntry {
     fn is_present(&self, structure: PageStructure) -> bool {
         self.get_flag(structure, PageFlag::Present).unwrap_or(true)
     }
-    fn get_addr(&self, structure: PageStructure) -> usize {
+    fn get_addr(&self, structure: PageStructure) -> Option<usize> {
         use PageStructure::*;
 
-        let is_page = *(unsafe { self.0.view_bits::<Lsb0>().get_unchecked(7) });
-        match (structure, is_page) {
-            (CR3, _) |
-            ()
+        if !self.is_present(structure) {
+            return None;
         }
-        
+
+        // Clear out 64:48 and 11:0
+        let mut addr = 0x0000_FFFF_FFFF_F000 & self.0;
+        let is_page = *(unsafe { self.0.view_bits::<Lsb0>().get_unchecked(7) });
+
+        // If a huge page, clear out bit 12
+        match (structure, is_page) {
+            (PDPT, true) |
+            (PD, true) => { addr = addr & !(0x1000); }
+            _ => ()
+        }
+        Some(addr)
     }
     /// Intepret the `PageEntry` as an entry in the `structure`, and try to
     /// find index of `flag` within the entry.
