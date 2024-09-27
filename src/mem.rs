@@ -1,4 +1,4 @@
-use derive_more::derive::{From, Into};
+use core::ops::{BitAnd, BitOr, Range, Sub};
 
 mod phy;
 mod virt;
@@ -45,3 +45,46 @@ pub fn kernel_size() -> usize {
 
 pub const USER_START_VMA: usize = 0x0000000000000000;
 pub const USER_START_PMA: usize = 0x400000;
+
+#[derive(Debug, Clone, Copy)]
+struct AddrRange {
+    start: usize,
+    end: usize
+}
+impl AddrRange {
+    fn is_empty(&self) -> bool { self.start == self.end }
+}
+impl From<Range<usize>> for AddrRange {
+    fn from(value: Range<usize>) -> Self {
+        AddrRange {
+            start: value.start,
+            end: if value.end > value.start {value.end} else {value.start}
+        }
+    }
+}
+impl Into<Range<usize>> for AddrRange {
+    fn into(self) -> Range<usize> {
+        self.start .. self.end
+    }
+}
+impl BitAnd for AddrRange {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let start = usize::max(self.start, rhs.start);
+        let end = usize::min(self.end, rhs.end);
+
+        Self::from(start .. end)
+    }
+}
+impl Sub for AddrRange {
+    type Output = impl Iterator<Item = AddrRange>;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let ranges: [AddrRange; 2] = [
+            (self.start .. usize::min(rhs.start, self.end)).into(), 
+            (self.end .. usize::max(rhs.end, self.start)).into()
+        ];
+        ranges.into_iter().filter(|x|!x.is_empty())
+    }
+}

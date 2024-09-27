@@ -1,161 +1,209 @@
-use core::{alloc::Layout, marker::PhantomPinned, mem, ops::Add, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, usize};
+use core::{alloc::Layout, marker::PhantomPinned, mem, ops::Add, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
 
 use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
 use derive_more::derive::{From, Into, Sub};
+use multiboot2::{BootInformation, MemoryAreaTypeId};
 
 use crate::mem::{kernel_end_lma, kernel_size, kernel_start_lma};
 
-use super::virt::VAddr;
+use super::{virt::VAddr, AddrRange};
 
 const PAGE_SIZE: usize = 0x1000;
 const _: () = assert!(PAGE_SIZE.is_power_of_two());
-
-static ALLOCATOR: Allocator<'static> = Allocator::new();
 
 /// Address in physical address space
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct PAddr(usize);
 
-struct Allocator<'a>(spin::Once<spin::Mutex<AllocatorInner<'a>>>);
-impl Allocator<'_> {
-    const fn new() -> Self {
-        Allocator(spin::Once::new())
-    }
-    /// Initialize allocator
-    /// 
-    /// # Safety
-    /// - 
-    unsafe fn init(&self, boot_info: &multiboot2::BootInformation) {
-        let mem_areas = boot_info.memory_map_tag().unwrap().memory_areas();
-        fn page_aligned_mem_range(mem_areas: &[multiboot2::MemoryArea]) -> (PAddr, PAddr) {
-            let (mem_lo, mem_hi) = mem_areas.iter().fold((usize::MAX, 0), 
-            |(min, max), area| {
-                let min = (area.start_address() as usize).min(min);
-                let max = (area.end_address() as usize).max(max);
-                (min, max)
-            });
-            if usize::MAX - mem_lo < PAGE_SIZE || mem_hi < PAGE_SIZE {
-                panic!()
-            }
-
-            let mem_lo = mem_lo.next_multiple_of(PAGE_SIZE);
-            let mem_hi = mem_hi - (mem_hi % PAGE_SIZE);
-            (PAddr(mem_lo), PAddr(mem_hi))
-        }
-
-        fn find_gap(
-            mem_areas: &[multiboot2::MemoryArea], 
-            gap_size: usize, 
-            gap_align: usize
-        ) -> Option<PAddr> {
-            let available = multiboot2::MemoryAreaTypeId
-                ::from(multiboot2::MemoryAreaType::Available);
-
-            for area in mem_areas {
-                if area.typ() != available {
-                    continue;
-                }
-                let gap_start = area.start_address() as usize;
-                let gap_start = gap_start.next_multiple_of(gap_align);
-                let gap_end = area.end_address() as usize;
-                if gap_end - gap_start < gap_size {
-                    continue;
-                }
-
-                return Some(PAddr(gap_start));
-            }
-            None
-        }
-
-        fn disable_unavailable_areas(
-            map: &mut FrameMap,
-            mem_areas: &[multiboot2::MemoryArea],
-        ) {
-            // Mark all the available areas
-            let available = multiboot2::MemoryAreaTypeId
-                ::from(multiboot2::MemoryAreaType::Available);
-
-            for area in mem_areas {
-                if area.typ() != available {
-                    continue;
-                }
-                let addr = area.start_address() as usize;
-                let size = area.size() as usize;
-                map.set(PAddr(addr), size, false);
-            }
-        }
-
-        fn disable_mbi_area(
-            map: &mut FrameMap,
-            mbi: &multiboot2::BootInformation,
-        ) {
-            map.set(PAddr(mbi.start_address()), mbi.total_size(), true);
-        }
-
-        fn disable_kernel_area(map: &mut FrameMap) {
-            let size = kernel_end_lma() - kernel_start_lma();
-            map.set(kernel_start_lma(), kernel_size(), true);
-        }
-
-
-        let (mem_lo, mem_hi) = page_aligned_mem_range(mem_areas);
-        let page_cnt = (mem_hi.0 - mem_lo.0) / PAGE_SIZE;
-        let map_bytes = FrameMap::bytes_required(page_cnt);
-        let map_align = FrameMap::align_required();
-        let map_addr = find_gap(mem_areas, map_bytes, map_align).unwrap();
-
-        // Converting PAddr to VAddr because we are currently have identity paging
-
-        // SAFETY: map_addr .. map_addr + map_bytes is page aligned and available
-        // as indicated by boot info. The memory be marked as occupied later
-        // in the function, and not allocated out
-        let map = unsafe { FrameMap::init(map_addr, page_cnt, mem_lo) };
-
-        // Populate frame map with unusable memories
-        disable_unavailable_areas(map, mem_areas);
-        disable_mbi_area(map, boot_info);
-        disable_kernel_area(map);
-
-        self.0.call_once(|| {
-            spin::Mutex::new(AllocatorInner { map })
-        });
-    }
-
-    /// Attempts to allocate `page_cnt` pages of physical memory. 
-    /// 
-    /// On success, returns a page aligned `PAddr` which points to the 
-    /// start of a `page_cnt * PAGE_SIZE` sized block of allocated physical
-    /// memory.
-    pub fn allocate(&mut self, page_cnt: usize) -> Option<PAddr> {
-        let mut inner = self.0.get_mut().unwrap().lock();
-        let addr = inner.map.find_unoccupied(page_cnt)?;
-
-        // Safety: Return from FrameMap::find_unoccupied is page aligned and 
-        // points to the start of page_cnt pages
-        unsafe { inner.map.set_unchecked(addr, page_cnt, true); }
-
-        Some( addr.into() )
-    }
-
-    /// Deallocate the memory pointed by `ptr`
-    /// 
-    /// # Safety
-    /// `ptr` points to `page_cnt` pages of physical memory currently 
-    /// allocated through this allocator.
-    pub unsafe fn deallocate(&mut self, ptr: PAddr, page_cnt: usize) {
-        let mut inner = self.0.get_mut().unwrap().lock();
-        // SAFETY: ptr is page aligned and points to page_cnt pages allocated
-        // in this FrameMap
-        unsafe { inner.map.set_unchecked(ptr.into(), page_cnt, false); }
-    } 
-
+/// Bootstrapping allocator to be used before the frame mapping allocator is
+/// available
+struct BootAllocator<'bootloader, const S: usize> {
+    mbi_range: AddrRange,
+    memory_areas: &'bootloader [multiboot2::MemoryArea],
+    brk: usize
 }
+impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
+    pub fn new<'a>(boot_info: &'a BootInformation ) -> BootAllocator<'a, S> {
+        let mbi_range = AddrRange::from(
+            boot_info.start_address() as usize .. boot_info.end_address() as usize
+        );
+        let memory_areas = boot_info.memory_map_tag().unwrap().memory_areas();
+        BootAllocator { 
+            mbi_range, 
+            memory_areas,
+            brk: 0 
+        }
+    }
+    pub fn page_size() -> usize {S}
+    fn free_areas(&'bootloader self) -> impl Iterator<Item = AddrRange> + 'bootloader{
+        let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
+        let kernel_area = AddrRange::from(kernel_start_lma() .. kernel_end_lma());
+        self.memory_areas
+            .iter()
+            .filter(move |area| 
+                area.typ() == available && area.end_address() as usize > self.brk
+            )
+            .map(|area| AddrRange::from(
+                area.start_address() as usize .. area.end_address() as usize
+            ))
+            .flat_map(move |range| range - kernel_area)
+            .flat_map(|range| range - self.mbi_range)
+    }
+
+    pub fn allocate(&mut self) -> Option<usize> {
+        fn find_aligned_page<const S: usize>(range: AddrRange)
+            -> Option<usize> {
+            let start = range.start.checked_next_multiple_of(S)?;
+            let end = range.end - (range.end % S);
+            (end.saturating_sub(start) >= S).then_some(start)
+        }
+        let addr = self.free_areas().find_map(find_aligned_page::<S>)?;
+        self.brk = addr + S;
+        Some(addr)
+    }
+}
+
+
+// struct Allocator<'a>(spin::Once<spin::Mutex<AllocatorInner<'a>>>);
+// impl Allocator<'_> {
+//     const fn new_uninit() -> Self {
+//         Allocator(spin::Once::new())
+//     }
+//     /// Initialize allocator
+//     /// 
+//     /// # Safety
+//     /// - 
+//     unsafe fn init(&self, boot_info: &multiboot2::BootInformation) {
+//         let mem_areas = boot_info.memory_map_tag().unwrap().memory_areas();
+//         fn page_aligned_mem_range(mem_areas: &[multiboot2::MemoryArea]) -> (PAddr, PAddr) {
+//             let (mem_lo, mem_hi) = mem_areas.iter().fold((usize::MAX, 0), 
+//             |(min, max), area| {
+//                 let min = (area.start_address() as usize).min(min);
+//                 let max = (area.end_address() as usize).max(max);
+//                 (min, max)
+//             });
+//             if usize::MAX - mem_lo < PAGE_SIZE || mem_hi < PAGE_SIZE {
+//                 panic!()
+//             }
+
+//             let mem_lo = mem_lo.next_multiple_of(PAGE_SIZE);
+//             let mem_hi = mem_hi - (mem_hi % PAGE_SIZE);
+//             (PAddr(mem_lo), PAddr(mem_hi))
+//         }
+
+//         fn find_gap(
+//             mem_areas: &[multiboot2::MemoryArea], 
+//             gap_size: usize, 
+//             gap_align: usize
+//         ) -> Option<PAddr> {
+//             let available = multiboot2::MemoryAreaTypeId
+//                 ::from(multiboot2::MemoryAreaType::Available);
+
+//             for area in mem_areas {
+//                 if area.typ() != available {
+//                     continue;
+//                 }
+//                 let gap_start = area.start_address() as usize;
+//                 let gap_start = gap_start.next_multiple_of(gap_align);
+//                 let gap_end = area.end_address() as usize;
+//                 if gap_end - gap_start < gap_size {
+//                     continue;
+//                 }
+
+//                 return Some(PAddr(gap_start));
+//             }
+//             None
+//         }
+
+//         fn disable_unavailable_areas(
+//             map: &mut FrameMap,
+//             mem_areas: &[multiboot2::MemoryArea],
+//         ) {
+//             // Mark all the available areas
+//             let available = multiboot2::MemoryAreaTypeId
+//                 ::from(multiboot2::MemoryAreaType::Available);
+
+//             for area in mem_areas {
+//                 if area.typ() != available {
+//                     continue;
+//                 }
+//                 let addr = area.start_address() as usize;
+//                 let size = area.size() as usize;
+//                 map.set(PAddr(addr), size, false);
+//             }
+//         }
+
+//         fn disable_mbi_area(
+//             map: &mut FrameMap,
+//             mbi: &multiboot2::BootInformation,
+//         ) {
+//             map.set(PAddr(mbi.start_address()), mbi.total_size(), true);
+//         }
+
+//         fn disable_kernel_area(map: &mut FrameMap) {
+//             let size = kernel_end_lma() - kernel_start_lma();
+//             map.set(kernel_start_lma(), kernel_size(), true);
+//         }
+
+
+//         let (mem_lo, mem_hi) = page_aligned_mem_range(mem_areas);
+//         let page_cnt = (mem_hi.0 - mem_lo.0) / PAGE_SIZE;
+//         let map_bytes = FrameMap::bytes_required(page_cnt);
+//         let map_align = FrameMap::align_required();
+//         let map_addr = find_gap(mem_areas, map_bytes, map_align).unwrap();
+
+//         // Converting PAddr to VAddr because we are currently have identity paging
+
+//         // SAFETY: map_addr .. map_addr + map_bytes is page aligned and available
+//         // as indicated by boot info. The memory be marked as occupied later
+//         // in the function, and not allocated out
+//         let map = unsafe { FrameMap::init(map_addr, page_cnt, mem_lo) };
+
+//         // Populate frame map with unusable memories
+//         disable_unavailable_areas(map, mem_areas);
+//         disable_mbi_area(map, boot_info);
+//         disable_kernel_area(map);
+
+//         self.0.call_once(|| {
+//             spin::Mutex::new(AllocatorInner { map })
+//         });
+//     }
+
+//     /// Attempts to allocate `page_cnt` pages of physical memory. 
+//     /// 
+//     /// On success, returns a page aligned `PAddr` which points to the 
+//     /// start of a `page_cnt * PAGE_SIZE` sized block of allocated physical
+//     /// memory.
+//     pub fn allocate(&mut self, page_cnt: usize) -> Option<PAddr> {
+//         let mut inner = self.0.get_mut().unwrap().lock();
+//         let addr = inner.map.find_unoccupied(page_cnt)?;
+
+//         // Safety: Return from FrameMap::find_unoccupied is page aligned and 
+//         // points to the start of page_cnt pages
+//         unsafe { inner.map.set_unchecked(addr, page_cnt, true); }
+
+//         Some( addr.into() )
+//     }
+
+//     /// Deallocate the memory pointed by `ptr`
+//     /// 
+//     /// # Safety
+//     /// `ptr` points to `page_cnt` pages of physical memory currently 
+//     /// allocated through this allocator.
+//     pub unsafe fn deallocate(&mut self, ptr: PAddr, page_cnt: usize) {
+//         let mut inner = self.0.get_mut().unwrap().lock();
+//         // SAFETY: ptr is page aligned and points to page_cnt pages allocated
+//         // in this FrameMap
+//         unsafe { inner.map.set_unchecked(ptr.into(), page_cnt, false); }
+//     } 
+
+// }
 
 /// Inner struct for `Allocator` holding the data. See `Allocator` for details.
-struct AllocatorInner<'a> {
-    map: &'a mut FrameMap,
-}
+// struct AllocatorInner<'a> {
+//     map: &'a mut FrameMap,
+// }
 
 #[repr(C)]
 struct FrameMap {

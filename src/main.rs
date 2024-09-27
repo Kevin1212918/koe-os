@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main] 
-#![feature(const_refs_to_static, ptr_as_ref_unchecked, ptr_metadata)]
+#![feature(const_refs_to_static, ptr_as_ref_unchecked, ptr_metadata, impl_trait_in_assoc_type)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod common;
