@@ -17,8 +17,7 @@ pub trait PageMapper {
     }
 
     /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any 
-    /// previous virtual page mapping at `vaddr`. This invalidates the 
-    /// virtual memory page of size `page_size` pointed by `vaddr`.
+    /// previous virtual page mapping at `vaddr`. 
     /// 
     /// # Safety
     /// - Virtual memory page of size `page_size` pointed by `vaddr` does not 

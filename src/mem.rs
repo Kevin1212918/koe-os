@@ -42,9 +42,16 @@ pub fn kernel_end_lma() -> usize {
 pub fn kernel_size() -> usize {
     kernel_end_vma() - kernel_start_vma()
 }
+#[inline]
+pub const fn kernel_data_max_vma() -> usize {
+    0x40000000
+}
+#[inline]
+pub fn kernel_data_vma() -> AddrRange {
+    AddrRange::from(kernel_end_vma() .. kernel_end_vma() + kernel_data_max_vma())
+}
 
-pub const USER_START_VMA: usize = 0x0000000000000000;
-pub const USER_START_PMA: usize = 0x400000;
+
 
 #[derive(Debug, Clone, Copy)]
 struct AddrRange {
