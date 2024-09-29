@@ -1,4 +1,4 @@
-use core::{alloc::Layout, marker::PhantomPinned, mem, ops::Add, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
+use core::{alloc::Layout, iter, marker::PhantomPinned, mem, ops::{Add, DerefMut}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
 
 use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
 use derive_more::derive::{From, Into, Sub};
@@ -11,17 +11,24 @@ use super::{virt::VAddr, AddrRange};
 const PAGE_SIZE: usize = 0x1000;
 const _: () = assert!(PAGE_SIZE.is_power_of_two());
 
+static BOOT_ALLOCATOR: Option<spin::Mutex<BootAllocator<PAGE_SIZE>>> = None;
+
 /// Address in physical address space
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct PAddr(usize);
-
+pub trait FrameAllocator {
+    fn page_sizes(&self) -> &[usize];
+    fn allocate(&mut self, size: usize) -> Option<PAddr>;
+    fn deallocate(&mut self, addr: PAddr);
+}
 /// Bootstrapping allocator to be used before the frame mapping allocator is
 /// available
 struct BootAllocator<'bootloader, const S: usize> {
     mbi_range: AddrRange,
     memory_areas: &'bootloader [multiboot2::MemoryArea],
-    brk: usize
+    brk: usize,
+    frame_sizes: [usize; 1],
 }
 impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
     pub fn new<'a>(boot_info: &'a BootInformation ) -> BootAllocator<'a, S> {
@@ -32,10 +39,10 @@ impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
         BootAllocator { 
             mbi_range, 
             memory_areas,
-            brk: 0 
+            brk: 0,
+            frame_sizes: [S],
         }
     }
-    pub fn page_size() -> usize {S}
     fn free_areas(&'bootloader self) -> impl Iterator<Item = AddrRange> + 'bootloader{
         let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
         let kernel_area = AddrRange::from(kernel_start_lma() .. kernel_end_lma());
@@ -50,8 +57,14 @@ impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
             .flat_map(move |range| range - kernel_area)
             .flat_map(|range| range - self.mbi_range)
     }
+}
+impl<const S: usize> FrameAllocator for BootAllocator<'_, S> {
+    fn page_sizes(&self) -> &[usize] {
+        &self.frame_sizes
+    }
 
-    pub fn allocate(&mut self) -> Option<usize> {
+    fn allocate(&mut self, size: usize) -> Option<PAddr> {
+        assert!(size == S);
         fn find_aligned_page<const S: usize>(range: AddrRange)
             -> Option<usize> {
             let start = range.start.checked_next_multiple_of(S)?;
@@ -60,8 +73,13 @@ impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
         }
         let addr = self.free_areas().find_map(find_aligned_page::<S>)?;
         self.brk = addr + S;
-        Some(addr)
+        Some(PAddr(addr))
     }
+    
+    fn deallocate(&mut self, _: PAddr) {
+        // BootAllocator does not deallocate
+    }
+
 }
 
 #[repr(C)]

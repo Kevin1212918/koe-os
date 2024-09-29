@@ -4,8 +4,7 @@ use core::arch::asm;
 
 use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 
-use super::{phy::PAddr, virt::VAddr};
-
+use super::{phy::{FrameAllocator, PAddr}, virt::VAddr};
 
 pub trait PageMapper {
     type PageSize: Ord;
@@ -27,7 +26,13 @@ pub trait PageMapper {
     /// 
     /// # Panics
     /// - `page_size` should be supported by the `PageMap`
-    unsafe fn map(&mut self, vaddr: VAddr, paddr: PAddr, page_size: Self::PageSize);
+    unsafe fn map(
+        &mut self, 
+        vaddr: VAddr, 
+        paddr: PAddr, 
+        page_size: Self::PageSize,
+        allocator: &mut dyn FrameAllocator
+    );
 
     /// Removes mapping at `vaddr`.
     /// 
@@ -43,13 +48,20 @@ pub trait PageMapper {
 
 //---------------------------- x86-64 stuff below ---------------------------//
 
+
 pub struct PageMap();
 impl PageMapper for PageMap {
     type PageSize = usize;
     fn supported_page_sizes() -> impl Iterator<Item = Self::PageSize> {
         [4096].into_iter()
     }
-    unsafe fn map(&mut self, vaddr: VAddr, paddr: PAddr, page_size: Self::PageSize) {
+    unsafe fn map(
+        &mut self, 
+        vaddr: VAddr, 
+        paddr: PAddr, 
+        page_size: Self::PageSize, 
+        allocator: &mut dyn FrameAllocator
+    ) {
         
     }
 

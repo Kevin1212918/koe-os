@@ -111,6 +111,11 @@ _enable_paging:
     or eax, 0b11
     mov [offset pg_dir_ptr_table + 510 * 8], eax
 
+    /* Set Temporary Huge Page at 509th entry of PDPT*/
+    lea eax, 0
+    or eax, 0b11000011
+    mov [offset pg_dir_ptr_table + 509 * 8], eax
+
     /* Set first entry of page directory table */
     mov eax, 0 
     or eax, 0b10000011
