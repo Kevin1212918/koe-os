@@ -1,57 +1,40 @@
 //!
 //! 
 //! # Virtual Memory Layout
-//! | Address                             | Description                       |
-//! |:------------------------------------|----------------------------------:|
-//! |0xFFFFF00000000000:0xFFFFF10000000000|VirtAlloc                          |
-//! |0xFFFFFFFF40000000:0xFFFFFFFF80000000|TempAlloc                          |
-//! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data                   |
+//! | Address                             | Description               | Size  |
+//! |:------------------------------------|--------------------------:|:-----:|
+//! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Map        | 64TiB |
+//! |0xFFFFF00000000000:0xFFFFF10000000000|VirtAlloc                  | 1TiB  |
+//! |0xFFFFF10000000000:0xFFFFF20000000000|IOMap                      | 1TiB  |
+//! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
-use derive_more::derive::{From, Into, Sub};
+use derive_more::derive::{Into, Sub};
 
-use super::AddrRange;
+use super::addr::{VAddr, VRange};
 
-/// Address in virtual address space
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, Into, From, PartialEq, Eq, PartialOrd, Ord, Hash, Sub)]
-pub struct VAddr(usize);    
-impl VAddr {
-    pub fn add_offset(mut self, x: usize) -> Self {
-        self.0 += x;
-        self
-    }
-    pub fn sub_offset(mut self, x: usize) -> Self {
-        self.0 -= x;
-        self
-    }
-}
+pub const PHYSICAL_MAP_OFFSET: usize = PHYSICAL_MAP_RANGE.start.into_usize();
+pub const PHYSICAL_MAP_RANGE: VRange = {
+    let start = unsafe{VAddr::from_usize(0xFFFF_8880_0000_0000)};
+    let end = unsafe{VAddr::from_usize(0xFFFF_C880_0000_0000)};
+    start .. end
+};
+pub const VIRT_ALLOC_RANGE: VRange = {
+    let start = unsafe{VAddr::from_usize(0xFFFF_F000_0000_0000)};
+    let end = unsafe{VAddr::from_usize(0xFFFF_F100_0000_0000)};
+    start .. end
+};
 
-#[inline]
-#[allow(non_snake_case)]
-pub const fn VIRT_ALLOC_RANGE() -> AddrRange {
-    AddrRange {
-        start: 0xFFFF_F000_0000_0000, 
-        end: 0xFFFF_F100_0000_0000
-    }
-}
+pub const IO_MAP_RANGE: VRange = {
+    let start = unsafe{VAddr::from_usize(0xFFFF_F100_0000_0000)};
+    let end = unsafe{VAddr::from_usize(0xFFFF_F200_0000_0000)};
+    start .. end
+};
 
-#[inline]
-#[allow(non_snake_case)]
-pub const fn TEMP_ALLOC_RANGE() -> AddrRange {
-    AddrRange { 
-        start: 0xFFFF_FFFFF_4000_0000, 
-        end: 0xFFFF_FFFF_8000_0000 
-    }
-}
-
-#[inline]
-#[allow(non_snake_case)]
-pub const fn MAX_KERNEL_RANGE() -> AddrRange {
-    AddrRange { 
-        start: 0xFFFF_FFFFF_8000_0000, 
-        end: 0xFFFF_FFFF_FF60_0000
-    }
-}
+pub const MAX_KERNEL_RANGE: VRange = {
+    let start = unsafe{VAddr::from_usize(0xFFFF_FFFF_8000_0000)};
+    let end = unsafe{VAddr::from_usize(0xFFFF_FFFF_FF60_0000)};
+    start .. end
+};
 
 pub enum VirtMemTyp {
     KernelData,
@@ -62,14 +45,14 @@ pub struct VirtAllocator {
 impl VirtAllocator {
     fn new() -> Self {
         VirtAllocator { 
-            kernel_data_brk: VAddr::from(VIRT_ALLOC_RANGE().start) 
+            kernel_data_brk: VIRT_ALLOC_RANGE.start
         }
     }
     fn allocate(&mut self, typ: VirtMemTyp, size: usize) -> Option<VAddr> {
         match typ {
             VirtMemTyp::KernelData => {
-                let new_brk = self.kernel_data_brk.add_offset(size);
-                let max = VAddr::from(VIRT_ALLOC_RANGE().end);
+                let new_brk = self.kernel_data_brk.byte_add(size);
+                let max = VIRT_ALLOC_RANGE.end;
                 if new_brk > max {
                     None
                 } else {
@@ -84,7 +67,7 @@ impl VirtAllocator {
     unsafe fn deallocate(&mut self, typ: VirtMemTyp, size: usize) {
         match typ {
             VirtMemTyp::KernelData => {
-                self.kernel_data_brk = self.kernel_data_brk.sub_offset(size);
+                self.kernel_data_brk = self.kernel_data_brk.byte_sub(size);
             }
         }
     }

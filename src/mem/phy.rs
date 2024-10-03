@@ -6,17 +6,13 @@ use multiboot2::{BootInformation, MemoryAreaTypeId};
 
 use crate::mem::{kernel_end_lma, kernel_size, kernel_start_lma};
 
-use super::{virt::VAddr, AddrRange};
+use super::addr::{AddrRange as _, PAddr, PRange, VAddr};
 
 const PAGE_SIZE: usize = 0x1000;
 const _: () = assert!(PAGE_SIZE.is_power_of_two());
 
 static BOOT_ALLOCATOR: Option<spin::Mutex<BootAllocator<PAGE_SIZE>>> = None;
 
-/// Address in physical address space
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct PAddr(usize);
 pub trait FrameAllocator {
     fn page_sizes(&self) -> &[usize];
     fn allocate(&mut self, size: usize) -> Option<PAddr>;
@@ -25,16 +21,16 @@ pub trait FrameAllocator {
 /// Bootstrapping allocator to be used before the frame mapping allocator is
 /// available
 struct BootAllocator<'bootloader, const S: usize> {
-    mbi_range: AddrRange,
+    mbi_range: PRange,
     memory_areas: &'bootloader [multiboot2::MemoryArea],
     brk: usize,
     frame_sizes: [usize; 1],
 }
 impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
     pub fn new<'a>(boot_info: &'a BootInformation ) -> BootAllocator<'a, S> {
-        let mbi_range = AddrRange::from(
-            boot_info.start_address() as usize .. boot_info.end_address() as usize
-        );
+        let mbi_range = unsafe {
+            PAddr::from_usize(boot_info.start_address()) .. PAddr::from_usize(boot_info.end_address())
+        };
         let memory_areas = boot_info.memory_map_tag().unwrap().memory_areas();
         BootAllocator { 
             mbi_range, 
@@ -43,19 +39,22 @@ impl<'bootloader, const S: usize> BootAllocator<'bootloader, S> {
             frame_sizes: [S],
         }
     }
-    fn free_areas(&'bootloader self) -> impl Iterator<Item = AddrRange> + 'bootloader{
+    fn free_areas(&'bootloader self) -> impl Iterator<Item = PRange> + 'bootloader{
         let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
-        let kernel_area = AddrRange::from(kernel_start_lma() .. kernel_end_lma());
+        let kernel_area = kernel_start_lma() .. kernel_end_lma();
         self.memory_areas
             .iter()
             .filter(move |area| 
                 area.typ() == available && area.end_address() as usize > self.brk
             )
-            .map(|area| AddrRange::from(
-                area.start_address() as usize .. area.end_address() as usize
-            ))
-            .flat_map(move |range| range - kernel_area)
-            .flat_map(|range| range - self.mbi_range)
+            .map(|area| unsafe {
+                let start = PAddr::from_usize(area.start_address() as usize);
+                let end = PAddr::from_usize(area.end_address() as usize);
+                start .. end
+            })
+            .flat_map(move |range| range.range_sub(kernel_area.clone()))
+            .flat_map(|range| range.range_sub(self.mbi_range.clone()))
+            .filter(|x|!x.is_empty())
     }
 }
 impl<const S: usize> FrameAllocator for BootAllocator<'_, S> {
@@ -65,15 +64,15 @@ impl<const S: usize> FrameAllocator for BootAllocator<'_, S> {
 
     fn allocate(&mut self, size: usize) -> Option<PAddr> {
         assert!(size == S);
-        fn find_aligned_page<const S: usize>(range: AddrRange)
+        fn find_aligned_page<const S: usize>(range: PRange)
             -> Option<usize> {
-            let start = range.start.checked_next_multiple_of(S)?;
-            let end = range.end - (range.end % S);
+            let start = range.start.into_usize().checked_next_multiple_of(S)?;
+            let end = range.end.into_usize() - (range.end.into_usize() % S);
             (end.saturating_sub(start) >= S).then_some(start)
         }
         let addr = self.free_areas().find_map(find_aligned_page::<S>)?;
         self.brk = addr + S;
-        Some(PAddr(addr))
+        Some(unsafe {PAddr::from_usize(addr)} )
     }
     
     fn deallocate(&mut self, _: PAddr) {
@@ -116,7 +115,7 @@ impl FrameMap {
         let map_bytes_required = n_bytes_required - 2 * size_of::<usize>();
 
         let map_ptr: *mut FrameMap = ptr::from_raw_parts_mut(
-            usize::from(addr) as *mut u8, map_bytes_required
+            addr.into_usize() as *mut u8, map_bytes_required
         );
 
         // SAFETY: FrameMap has repr(C), thus for a FrameMap with map size of
@@ -142,8 +141,8 @@ impl FrameMap {
     /// - `addr` to `addr + page_cnt * PAGE_SIZE` should be fully managed by
     /// the `FrameMap`
     unsafe fn set_unchecked(&mut self, addr: PAddr, page_cnt: usize, is_occupied: bool) {
-        let PAddr(addr) = addr;
-        let idx = usize::from(addr - self.base.0) / PAGE_SIZE;
+        let addr = addr.into_usize();
+        let idx = usize::from(addr - self.base.into_usize()) / PAGE_SIZE;
         let slice = self.map.view_bits_mut::<Lsb0>();
         slice[idx..idx + page_cnt].fill(is_occupied);
     }
@@ -152,12 +151,12 @@ impl FrameMap {
     /// `addr` to `addr + size`. Does not do anything if `addr + size` is out
     /// of bound. 
     fn set(&mut self, addr: PAddr, size: usize, is_occupied: bool) {
-        let PAddr(addr) = addr;
+        let addr = addr.into_usize();
         let Some(addr_end) = addr.checked_add(size) else { return; };
-        let section_start = addr.max(self.base.0);
+        let section_start = addr.max(self.base.into_usize());
         let section_start = section_start - (section_start % PAGE_SIZE);
 
-        let section_end = addr_end.min(self.base.0 + self.len * PAGE_SIZE);
+        let section_end = addr_end.min(self.base.into_usize() + self.len * PAGE_SIZE);
         let section_end = section_end.next_multiple_of(PAGE_SIZE);
 
         // The provided section does not overlap with managed pages
@@ -171,7 +170,12 @@ impl FrameMap {
         // section_start >= self.base and 
         // section_end <= self.base + self.len * PAGE_SIZE, so 
         // section_start .. section_end is managed by the FrameMap
-        unsafe { self.set_unchecked(PAddr(section_start), page_cnt, is_occupied); }
+        unsafe { 
+            self.set_unchecked(
+                PAddr::from_usize(section_start),
+                page_cnt, is_occupied
+            ); 
+        }
     }
 
     /// Returns address to the start of a section of unoccupied `page_cnt` 
@@ -187,6 +191,6 @@ impl FrameMap {
             .find(|(_, window)| 
                 window.not_any()
             )?.0;
-        Some(PAddr(self.base.0 + idx * PAGE_SIZE))
+        Some(self.base.byte_add(idx * PAGE_SIZE))
     }
 }
