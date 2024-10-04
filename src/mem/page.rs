@@ -4,7 +4,7 @@ use core::{arch::asm, cell::SyncUnsafeCell, iter, ptr::addr_of};
 
 use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 
-use crate::mem::{kernel_end_lma, kernel_end_vma, kernel_start_lma, kernel_start_vma, kernel_v2p, kernel_virt_to_phy, virt::IO_MAP_RANGE};
+use crate::mem::{kernel_end_lma, kernel_end_vma, kernel_start_lma, kernel_start_vma, kernel_virt_to_phy, phy_to_virt, virt::IO_MAP_RANGE};
 
 use super::{addr::{PAddr, PPage, PageSize, VAddr, VPage}, phy::FrameAllocator};
 
@@ -35,7 +35,7 @@ pub trait PageMapper {
         vpage: VPage, 
         ppage: PPage, 
         allocator: &mut dyn FrameAllocator
-    );
+    ) -> bool;
 
     /// Removes mapping at `vaddr`.
     /// 
@@ -126,9 +126,9 @@ impl PageMapper for PageMap {
         vpage: VPage, 
         ppage: PPage, 
         allocator: &mut dyn FrameAllocator
-    ) {
+    ) -> bool {
         use PageEntryTyp::*;
-        const PAGE_LEVELS: [PageEntryTyp; 5] = [
+        const ENTRY_LEVELS: [PageEntryTyp; 5] = [
             CR3, 
             PML4,
             PDPT { is_page: true },
@@ -136,17 +136,21 @@ impl PageMapper for PageMap {
             PT
         ];
         assert_eq!(vpage.size, ppage.size);
+        let mut cr3 = get_cr3();
 
-        let mut cur_page_level_idx = 0;
-        let mut cur_entry = get_cr3();
+        let mut cur_entry_level_idx = 0;
+        let mut cur_entry_level = ENTRY_LEVELS[cur_entry_level_idx];
+        let mut cur_entry = &mut cr3;
         let target_level = PageEntryTyp::from_page_size(vpage.size);
 
-        loop {
+        while cur_entry_level != target_level {
+            if cur_entry.
+            let next_addr = phy_to_virt(cur_entry.get_ref_addr(cur_entry_level));
+
 
         }
 
-
-
+        true
     }
     
     unsafe fn unmap(&mut self, vaddr: VAddr) {
@@ -327,27 +331,28 @@ impl PageEntry {
 
 }
 
-
+/// A flag in a page entry. Currently supports `Present`, `ReadWrite`, 
+/// `UserSuper`, `PageSize`, `Global`.
 #[derive(Debug, Clone, Copy)]
 pub enum PageFlag {
     // Universal set_flags  
     Present,
     ReadWrite,
     UserSuper,
-    WriteThru,
-    CacheDisable,
-    Accessed,
+    // WriteThru,
+    // CacheDisable,
+    // Accessed,
     
     // Table/Page
     PageSize,
 
     // Page flags
-    Dirty,
-    PageAttrTbl,
+    // Dirty,
+    // PageAttrTbl,
     Global,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageEntryTyp {
     /// Control Register 3
     CR3,
@@ -388,27 +393,27 @@ impl PageEntryTyp {
         
         // SAFETY: 7 is less than size of usize
         match (self, flag) {
-            (CR3, WriteThru) => Some(3),
-            (CR3, CacheDisable) => Some(4),
+            // (CR3, WriteThru) => Some(3),
+            // (CR3, CacheDisable) => Some(4),
             (CR3, _) => None,
 
             (_, Present) => Some(0),
             (_, ReadWrite) => Some(1),
             (_, UserSuper) => Some(2),
-            (_, WriteThru) => Some(3),
-            (_, CacheDisable) => Some(4),
-            (_, Accessed) => Some(5),
+            // (_, WriteThru) => Some(3),
+            // (_, CacheDisable) => Some(4),
+            // (_, Accessed) => Some(5),
 
             (PD{..}, PageSize) |
             (PDPT{..}, PageSize) => Some(7),
 
-            (PT, Dirty) |
-            (PD{is_page: true}, Dirty) |
-            (PDPT{is_page: true}, Dirty) => Some(6),
+            // (PT, Dirty) |
+            // (PD{is_page: true}, Dirty) |
+            // (PDPT{is_page: true}, Dirty) => Some(6),
             
-            (PT, PageAttrTbl) => Some(7),
-            (PD{is_page: true}, PageAttrTbl) |
-            (PDPT{is_page: true}, PageAttrTbl) => Some(12),
+            // (PT, PageAttrTbl) => Some(7),
+            // (PD{is_page: true}, PageAttrTbl) |
+            // (PDPT{is_page: true}, PageAttrTbl) => Some(12),
 
             (PT, Global) |
             (PD{is_page: true}, Global) |
