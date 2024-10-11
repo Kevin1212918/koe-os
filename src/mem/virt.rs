@@ -3,72 +3,159 @@
 //! # Virtual Memory Layout
 //! | Address                             | Description               | Size  |
 //! |:------------------------------------|--------------------------:|:-----:|
-//! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Map        | 64TiB |
-//! |0xFFFFF00000000000:0xFFFFF10000000000|VirtAlloc                  | 1TiB  |
+//! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Remap      | 64TiB |
+//! |0xFFFFC90000000000:0xFFFFE90000000000|VAlloc                     | 1TiB  |
 //! |0xFFFFF10000000000:0xFFFFF20000000000|IOMap                      | 1TiB  |
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
+use core::marker::PhantomData;
+
 use derive_more::derive::{Into, Sub};
+use multiboot2::BootInformation;
 
-use super::addr::{VAddr, VRange};
+use crate::mem::{addr::{AddrRange, PAddr, PRange}, phy, phy_to_virt};
 
-pub const PHYSICAL_MAP_OFFSET: usize = PHYSICAL_MAP_RANGE.start.into_usize();
-pub const PHYSICAL_MAP_RANGE: VRange = {
-    let start = unsafe{VAddr::from_usize(0xFFFF_8880_0000_0000)};
-    let end = unsafe{VAddr::from_usize(0xFFFF_C880_0000_0000)};
-    start .. end
-};
-pub const VIRT_ALLOC_RANGE: VRange = {
-    let start = unsafe{VAddr::from_usize(0xFFFF_F000_0000_0000)};
-    let end = unsafe{VAddr::from_usize(0xFFFF_F100_0000_0000)};
-    start .. end
-};
+use super::addr::{PageBitmap, PageSize, VAddr, VPage, VPages, VRange};
 
-pub const IO_MAP_RANGE: VRange = {
-    let start = unsafe{VAddr::from_usize(0xFFFF_F100_0000_0000)};
-    let end = unsafe{VAddr::from_usize(0xFFFF_F200_0000_0000)};
-    start .. end
-};
-
-pub const MAX_KERNEL_RANGE: VRange = {
-    let start = unsafe{VAddr::from_usize(0xFFFF_FFFF_8000_0000)};
-    let end = unsafe{VAddr::from_usize(0xFFFF_FFFF_FF60_0000)};
-    start .. end
-};
-
-pub enum VirtMemTyp {
-    KernelData,
+pub trait VirtSpace {
+    const RANGE: VRange;
 }
-pub struct VirtAllocator {
-    kernel_data_brk: VAddr,
+pub struct VAllocSpace;
+impl VirtSpace for VAllocSpace {
+    const RANGE: VRange = {
+        let start = unsafe{VAddr::from_usize(0xFFFF_C900_0000_0000)};
+        let end = unsafe{VAddr::from_usize(0xFFFF_E900_0000_0000)};
+        start .. end
+    };
 }
-impl VirtAllocator {
-    fn new() -> Self {
-        VirtAllocator { 
-            kernel_data_brk: VIRT_ALLOC_RANGE.start
-        }
-    }
-    fn allocate(&mut self, typ: VirtMemTyp, size: usize) -> Option<VAddr> {
-        match typ {
-            VirtMemTyp::KernelData => {
-                let new_brk = self.kernel_data_brk.byte_add(size);
-                let max = VIRT_ALLOC_RANGE.end;
-                if new_brk > max {
-                    None
-                } else {
-                    let ret = Some(self.kernel_data_brk);
-                    self.kernel_data_brk = new_brk;
-                    ret
-                }
 
-            },
-        }
-    }
-    unsafe fn deallocate(&mut self, typ: VirtMemTyp, size: usize) {
-        match typ {
-            VirtMemTyp::KernelData => {
-                self.kernel_data_brk = self.kernel_data_brk.byte_sub(size);
+pub struct KernelSpace;
+impl VirtSpace for KernelSpace {
+    const RANGE: VRange = {
+        let start = unsafe{VAddr::from_usize(0xFFFF_FFFF_8000_0000)};
+        let end = unsafe{VAddr::from_usize(0xFFFF_FFFF_FF60_0000)};
+        start .. end
+    };
+}
+
+pub struct IORemapSpace;
+impl VirtSpace for IORemapSpace {
+    const RANGE: VRange = {
+        let start = unsafe{VAddr::from_usize(0xFFFF_F100_0000_0000)};
+        let end = unsafe{VAddr::from_usize(0xFFFF_F200_0000_0000)};
+        start .. end
+    };
+}
+
+pub struct PhysicalRemapSpace;
+impl PhysicalRemapSpace {
+    pub const OFFSET: usize = Self::RANGE.start.into_usize();
+}
+impl VirtSpace for PhysicalRemapSpace {
+    const RANGE: VRange = {
+        let start = unsafe{VAddr::from_usize(0xFFFF_8880_0000_0000)};
+        let end = unsafe{VAddr::from_usize(0xFFFF_C880_0000_0000)};
+        start .. end
+    };
+}
+
+
+pub trait Allocator<S: VirtSpace> {
+    /// Allocate a page of size `page_size`.
+    /// 
+    /// It is guarenteed that an allocated page will not be allocated again for
+    /// the duration of the program.
+    fn allocate_page(&self, page_size: PageSize) -> Option<VPage>;
+    /// Allocates contiguous `page_size`-sized pages whose sizes summed up is 
+    /// at least of size `size`.
+    /// 
+    /// Note that each of the allocated pages should be deallocated 
+    /// individually.
+    /// 
+    /// It is guarenteed that an allocated page will not be allocated again for
+    /// the duration of the program.
+    fn allocate_contiguous(&self, size: usize, page_size: PageSize) -> Option<VPages>;
+    /// Deallocate the page with base `addr` and was allocated through this 
+    /// allocator.
+    /// 
+    /// # Safety
+    /// `addr` should be `base` of an allocated page.
+    unsafe fn deallocate(&self, addr: VPage);
+}
+
+
+pub const BITMAP_ALLOCATOR_PAGE_SIZE: PageSize = PageSize::Small;
+type VPageBitMap = PageBitmap<{BITMAP_ALLOCATOR_PAGE_SIZE.into_usize()}, VAddr>;
+pub struct BitmapAllocator<S: VirtSpace> {
+    bitmap: spin::Mutex<&'static mut VPageBitMap>,
+    _space: PhantomData<S>,
+}
+
+impl<S: VirtSpace> BitmapAllocator<S> {
+    pub const PAGE_SIZE: PageSize = PageSize::Small;
+    fn new(boot_info: &BootInformation, palloc: impl phy::Allocator) -> Self {
+
+        fn initial_memory_range(boot_info: &BootInformation) -> PRange {
+            let memory_areas = boot_info.memory_map_tag()
+                .expect("BootInformation should include memory map").memory_areas();
+
+            let (mut min, mut max) = (usize::MAX, 0);
+            for area in memory_areas {
+                min = usize::min(area.start_address() as usize, min);
+                max = usize::max(area.end_address() as usize, max);
+            }
+            assert!(min < max, "BootInformation memory map should not be empty");
+
+            unsafe {
+                PAddr::from_usize(min) .. PAddr::from_usize(max+1)
             }
         }
+
+        let init_mem_page_cnt = initial_memory_range(boot_info)
+            .contained_pages(BITMAP_ALLOCATOR_PAGE_SIZE)
+            .len();
+
+        let bitmap_size = VPageBitMap::bytes_required(init_mem_page_cnt);
+        let bitmap_pages = palloc.allocate_contiguous(bitmap_size, BITMAP_ALLOCATOR_PAGE_SIZE)
+            .expect("phy::Allocator should succeed");
+        let bitmap_addr = phy_to_virt(bitmap_pages.start());
+
+        let bitmap_ref = unsafe { 
+            PageBitmap::init(
+                bitmap_addr.into_ptr(), 
+                S::RANGE.start, 
+                init_mem_page_cnt
+            ) 
+        };
+
+        Self {bitmap: spin::Mutex::new(bitmap_ref), _space: PhantomData} 
+    }
+}
+
+impl<S: VirtSpace> Allocator<S> for BitmapAllocator<S> {
+    fn allocate_page(&self, page_size: PageSize) -> Option<VPage> {
+        assert!(page_size == BITMAP_ALLOCATOR_PAGE_SIZE);
+
+        let base = self.bitmap.lock().find_unoccupied(1)?;
+        unsafe { self.bitmap.lock().set_unchecked(base, 1, true) };
+        Some(VPage::new(base, page_size))
+    }
+
+    fn allocate_contiguous(&self, size: usize, page_size: PageSize) -> Option<VPages> {
+        assert!(page_size == BITMAP_ALLOCATOR_PAGE_SIZE);
+
+        let page_byte_size = page_size.into_usize();
+
+        let page_cnt = size.div_ceil(page_byte_size);
+        let base = self.bitmap.lock().find_unoccupied(page_cnt)?;
+        unsafe { self.bitmap.lock().set_unchecked(base, page_cnt, true) };
+
+        let start_page = VPage::new(base, page_size);
+        let end_page = VPage::new(base.byte_add(page_cnt * page_byte_size), page_size);
+        Some(VPages::new(start_page, end_page))
+    }
+
+    unsafe fn deallocate(&self, page: VPage) {
+        self.bitmap.lock().set(page.start(), BITMAP_ALLOCATOR_PAGE_SIZE.into_usize(), false);
     }
 }
