@@ -3,6 +3,7 @@ use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDef
 use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
 use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
+use spin::Mutex;
 
 use crate::mem::{addr::Pages, kernel_end_lma, kernel_size, kernel_start_lma, phy_to_virt};
 
@@ -269,7 +270,8 @@ impl<'boot> Memblocks<'boot> {
 
         true
     }
-    fn cut_block(&mut self, layout: Layout) -> Option<Memblock> {
+    fn cut_block(&mut self, layout: Layout, offset: usize) -> Option<Memblock> {
+        
         let (cut_idx, cut_base) = self.data.iter().enumerate()
         .find_map(|(idx, b)| {
             if b.is_empty() { return None }
@@ -304,10 +306,11 @@ impl<'boot> Memblocks<'boot> {
     }
 } 
 
-pub struct MemblockAllocator<'boot> {
+pub struct MemblockAllocatorInner<'boot> {
     free_blocks: Memblocks<'boot>,
     reserved_blocks: Memblocks<'boot>,
 }
+pub struct MemblockAllocator<'boot>(spin::Mutex<MemblockAllocatorInner<'boot>>);
 impl MemblockAllocator<'_> {
     const MAX_MEMBLOCKS_LEN: usize = 128;
     fn init<'boot>() -> MemblockAllocator<'boot> {
@@ -326,10 +329,25 @@ impl MemblockAllocator<'_> {
                 RESERVED_BLOCKS.get().as_mut_unchecked().as_mut_slice());
         }
 
-        MemblockAllocator { free_blocks, reserved_blocks }
+        MemblockAllocator(
+            spin::Mutex::new(MemblockAllocatorInner { free_blocks, reserved_blocks })
+        )
     }
-    fn add_managed_range(&mut self, base: usize, size: usize) -> bool {
-        self.free_blocks.put_block()
+    fn add_free(&self, base: usize, size: usize) -> bool {
+        self.0.lock().free_blocks.put_block(Memblock::new(base, size))
     }
-}
+    fn add_reserved(&self, base: usize, size: usize) -> bool {
+        self.0.lock().reserved_blocks.put_block(Memblock::new(base, size))
+    }
+    fn allocate(&self, layout: Layout) -> Option<PAddr> {
+        let mut inner_ref = self.0.lock();
 
+        let free_block = inner_ref.free_blocks.cut_block(layout)?;
+        let ret = free_block.base;
+        inner_ref.reserved_blocks.put_block(free_block).then_some(())
+            .expect("A block taken from free_blocks should be valid in reserved blocks");
+
+        Some(PAddr::from(ret))
+    }
+    fn allocate_at
+}
