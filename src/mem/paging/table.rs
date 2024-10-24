@@ -1,0 +1,52 @@
+use core::ops::IndexMut;
+
+use crate::{common::KiB, mem::VAddr};
+
+use super::{entry::{EntryRef, RawEntry}, Level};
+
+pub const TABLE_SIZE: usize = 4 * KiB;
+pub const TABLE_LEN: usize = TABLE_SIZE / size_of::<RawEntry>();
+pub const TABLE_ALIGNMENT: usize = TABLE_SIZE;
+
+// Workaround to ensure alginement of PAGE_TABLE_SIZE for PageTable
+const _: () = assert!(TABLE_ALIGNMENT == 4 * KiB);
+/// A paging table
+#[repr(C, align(4096))]
+pub struct RawTable(pub [RawEntry; TABLE_LEN]);
+impl RawTable {
+
+    pub const fn default() -> Self { Self([RawEntry::default(); TABLE_LEN]) }
+}
+
+pub struct TableRef<'a> {
+    level: Level,
+    data: &'a mut RawTable,
+}
+
+impl<'a> TableRef<'a> {
+    pub unsafe fn from_raw(level: Level, data: &'a mut RawTable) -> Self {
+        Self { level, data }
+    }
+    
+    /// For a `Table` of the given `typ`, get the `PageEntry` indexed by 
+    /// `addr`
+    pub fn index_with_vaddr(self, addr: VAddr) -> EntryRef<'a> {
+        let idx_range = self.level.page_table_idx_range();
+        let idx = addr.index_range(&idx_range);
+        debug_assert!(idx < self.data.0.len());
+        let raw_entry = unsafe {self.data.0.get_unchecked_mut(idx)};
+        unsafe { EntryRef::from_raw(raw_entry, self.level) }
+    }
+
+    pub fn index(self, idx: usize) -> EntryRef<'a> {
+        let raw_entry = self.data.0.get_mut(idx)
+            .expect("TableRef index out of bound");
+        unsafe { EntryRef::from_raw(raw_entry, self.level) }
+    }
+
+    pub fn reborrow<'b>(&'b mut self) -> TableRef<'b> where 'a: 'b {
+        TableRef { level: self.level, data: &mut self.data }
+    }
+
+}
+

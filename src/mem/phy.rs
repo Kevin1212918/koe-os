@@ -5,45 +5,42 @@ use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
 use spin::Mutex;
 
-use crate::mem::{addr::Pages, kernel_end_lma, kernel_size, kernel_start_lma, phy_to_virt};
+use crate::{boot, mem::{addr::Pages, kernel_end_lma, kernel_size, kernel_start_lma, phy_to_virt}};
 
 use super::addr::{AddrRange as _, PAddr, PPage, PPages, PRange, PageBitmap, PageSize, VAddr};
 
 pub(super) static BIT_ALLOCATOR: spin::Mutex<Option<BitmapAllocator>> = spin::Mutex::new(None);
 
 pub(super) fn init(mbi_ptr: usize) {
-
-    BIT_ALLOCATOR.lock().get_or_insert_with(|| BitmapAllocator::new(boot_info));
+    todo!()
 }
 
-pub(super) trait Allocator {
-    /// Allocate a page of size `page_size`.
+/// An page aligned allocator for physical memory
+pub trait Allocator {
+    /// Allocates contiguous `cnt` of `page_size`-sized pages
     /// 
     /// It is guarenteed that an allocated page will not be allocated again for
     /// the duration of the program.
-    fn allocate_page(&self, page_size: PageSize) -> Option<PPage>;
-    /// Allocates contiguous `page_size`-sized pages whose sizes summed up is 
-    /// at least of size `size`.
-    /// 
-    /// Note that each of the allocated pages should be deallocated 
-    /// individually.
-    /// 
-    /// It is guarenteed that an allocated page will not be allocated again for
-    /// the duration of the program.
-    fn allocate_contiguous(&self, size: usize, page_size: PageSize) -> Option<PPages>;
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PPage>;
+
+    /// Allocates contiguous `cnt` of `page_size`-sized pages which starts 
+    /// at `at`. If the `cnt` pages starting at `at` is not available to 
+    /// allocate, this tries to allocate some other contiguous pages.
+    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage>;
+
     /// Deallocate `page`
     /// 
     /// # Safety
     /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate(&self, page: PPage);
+    unsafe fn deallocate_pages(&self, page: PPage, cnt: usize);
 }
 
 /// Find the initial free memory areas.
 /// 
 /// Note this only considers the memory usage before `kmain` is called.
-fn initial_free_memory_areas<'bootloader>(
-    boot_info: &'bootloader BootInformation
-) -> impl Iterator<Item = PRange> + 'bootloader{
+fn initial_free_memory_areas<'boot>(
+    boot_info: &'boot BootInformation
+) -> impl Iterator<Item = PRange> + 'boot{
     let mbi_range = unsafe {
         let start = PAddr::from_usize(boot_info.start_address());
         let end = PAddr::from_usize(boot_info.end_address());
@@ -136,15 +133,7 @@ impl BitmapAllocator {
     }
 }
 impl Allocator for BitmapAllocator {
-    fn allocate_page(&self, page_size: PageSize) -> Option<PPage> {
-        assert!(page_size == Self::PAGE_SIZE);
-
-        let base = self.bitmap.lock().find_unoccupied(1)?;
-        unsafe { self.bitmap.lock().set_unchecked(base, 1, true) };
-        Some(PPage::new(base, page_size))
-    }
-
-    fn allocate_contiguous(&self, size: usize, page_size: PageSize) -> Option<PPages> {
+    fn allocate_pages(&self, size: usize, page_size: PageSize) -> Option<PPage> {
         assert!(page_size == Self::PAGE_SIZE);
         let page_byte_size = page_size.into_usize();
 
@@ -152,202 +141,38 @@ impl Allocator for BitmapAllocator {
         let base = self.bitmap.lock().find_unoccupied(page_cnt)?;
         unsafe { self.bitmap.lock().set_unchecked(base, page_cnt, true) };
 
-        let start_page = PPage::new(base, page_size);
-        let end_page = PPage::new(base.byte_add(page_cnt * page_byte_size), page_size);
-        Some(Pages::new(start_page, end_page))
+        Some(PPage::new(base, page_size))
+    }
+    
+    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage> {
+        todo!()
     }
 
-    unsafe fn deallocate(&self, page: PPage) {
-        self.bitmap.lock().set(page.start(), Self::PAGE_SIZE.into_usize(), false);
-    }
-}
-
-/// An extent of memory used in `MemblockAllocator``. Note present `Memblock` 
-/// is considered greater than not present `Memblock`
-#[derive(Debug, Default, Clone, Copy)]
-struct Memblock {
-    is_present: usize,
-    base: usize,
-    size: usize,
-}
-impl PartialEq for Memblock {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_present == other.is_present && 
-        (self.is_present == 0 || self.base == other.base)
-    }
-}
-impl Eq for Memblock {}
-impl PartialOrd for Memblock {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.is_present.partial_cmp(&other.is_present) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord.map(|x|x.reverse()),
-        }
-        if self.is_present == 0 { return Some(core::cmp::Ordering::Equal); }
-        self.base.partial_cmp(&other.base)
-    }
-}
-impl Ord for Memblock {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.partial_cmp(other).expect("Memblock order should be total")
-    }
-}
-impl Memblock {
-    fn is_empty(&self) -> bool { self.is_present == 0 }
-    const fn empty() -> Self { Self { is_present: 0, base: 0, size: 0 } }
-    const fn new(base: usize, size: usize) -> Self { 
-        Self {is_present: 1, base, size }
+    unsafe fn deallocate_pages(&self, page: PPage, cnt: usize) {
+        let size = cnt * Self::PAGE_SIZE.into_usize();
+        self.bitmap.lock().set(page.start(), size, false);
     }
 }
 
-/// A reference to a sorted array of `Memblock`s.
-struct Memblocks<'boot> {
-    data: &'boot mut [Memblock], 
-    len: usize,
-}
-impl<'boot> Memblocks<'boot> {
-    fn new(blocks: &'boot mut [Memblock]) -> Self {
-        blocks.sort_unstable();
-        Self {data: blocks, len: 0}
+impl Allocator for boot::MemblockAllocator<'_> {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PPage> {
+        let layout = Layout::from_size_align(
+            cnt * page_size.into_usize(), 
+            page_size.alignment()
+        ).expect("page_size should convert to a valid layout");
+        self.allocate(layout).map(|addr| PPage::new(addr, page_size))
     }
-    fn len(&self) -> usize {
-        self.len
+
+    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage> {
+        let layout = Layout::from_size_align(
+            cnt * page_size.into_usize(), 
+            page_size.alignment()
+        ).expect("page_size should convert to a valid layout");
+        self.allocate_at(layout, at.start().into_usize())
+            .map(|addr| PPage::new(addr, page_size))
     }
-    fn put_block(&mut self, block: Memblock) -> bool {
-        // Memblocks is full
-        if self.len == self.data.len() { return false; }
-        // Inserting empty block is no-op
-        if block.is_empty() { return true; }
 
-
-        let Some(pivot) = self.data.binary_search(&block).err() else {
-            // Inserting overlapping block
-            return false;
-        };
-
-        // Check if block overlap or merge with prev or next block
-        let mut merge_prev: Option<usize> = None;
-        let mut merge_next: Option<usize> = None;
-
-        if pivot > 0 {
-            // SAFETY: Given pivot > 0, pivot - 1 should be in bound
-            let prev = unsafe {self.data.get_unchecked(pivot - 1)};
-            debug_assert!(!prev.is_empty());
-            debug_assert!(prev.base <= block.base);
-            if block.base - prev.base < prev.size { return false; }
-            if block.base - prev.base == prev.size { merge_prev = Some(pivot - 1)};
-        }
-
-        // SAFETY: pivot should be in bound
-        let next = unsafe {self.data.get_unchecked(pivot)};
-        debug_assert!(next.base >= block.base);
-        if !next.is_empty() {
-            if next.base - block.base < block.size { return false; }
-            if next.base - block.base == block.size { merge_next = Some(pivot); }
-        }
-
-        match (merge_prev, merge_next) {
-            (None, None) => {
-                self.data[pivot ..= self.len].rotate_right(1);
-                self.data[pivot] = block;
-                self.len += 1;
-            },
-            (None, Some(idx)) => {
-                self.data[idx].base = block.base;
-                self.data[idx].size += block.size;
-            },
-            (Some(idx), None) => {
-                self.data[idx].size += block.size;
-            },
-            (Some(prev), Some(pivot)) => {
-                debug_assert!(pivot != self.len);
-                self.data[prev].size += self.data[pivot].size + block.size;
-                self.data[pivot] = Memblock::empty();
-                self.data[pivot .. self.len].rotate_left(1);
-                self.len -= 1;
-            },
-        }
-
-        true
+    unsafe fn deallocate_pages(&self, page: PPage, _cnt: usize) {
+        unsafe {self.deallocate(page.start())};
     }
-    fn cut_block(&mut self, layout: Layout, offset: usize) -> Option<Memblock> {
-        
-        let (cut_idx, cut_base) = self.data.iter().enumerate()
-        .find_map(|(idx, b)| {
-            if b.is_empty() { return None }
-            let unaligned_base = b.base + (b.size.checked_sub(layout.size())?);
-            let aligned_base = unaligned_base - unaligned_base % layout.align();
-            (aligned_base >= b.base).then_some((idx, aligned_base))
-        })?;
-        let base = cut_base;
-        let size = self.data[cut_idx].size - (cut_base - self.data[cut_idx].base);
-
-        self.data[cut_idx].size = cut_base - self.data[cut_idx].base;
-        if self.data[cut_idx].size == 0 {
-            self.data[cut_idx] = Memblock::empty();
-            self.data[cut_idx .. self.len].rotate_left(1);
-            self.len -= 1;
-        }
-
-        Some(Memblock::new(base, size))
-    }
-    fn take_block(&mut self, base: usize) -> Option<Memblock> {
-        let idx = self.data
-        .binary_search_by_key(&base, |b| {
-            if b.is_empty() { usize::MAX } else { b.base }
-        }).ok()?;
-
-        let ret = self.data[idx];
-        self.data[idx] = Memblock::empty();
-        self.data[idx .. self.len].rotate_left(1);
-        self.len -= 1;
-
-        Some(ret)
-    }
-} 
-
-pub struct MemblockAllocatorInner<'boot> {
-    free_blocks: Memblocks<'boot>,
-    reserved_blocks: Memblocks<'boot>,
-}
-pub struct MemblockAllocator<'boot>(spin::Mutex<MemblockAllocatorInner<'boot>>);
-impl MemblockAllocator<'_> {
-    const MAX_MEMBLOCKS_LEN: usize = 128;
-    fn init<'boot>() -> MemblockAllocator<'boot> {
-        static FREE_BLOCKS: SyncUnsafeCell<[Memblock; MemblockAllocator::MAX_MEMBLOCKS_LEN]> = 
-            SyncUnsafeCell::new([Memblock::empty(); MemblockAllocator::MAX_MEMBLOCKS_LEN]);
-        static RESERVED_BLOCKS: SyncUnsafeCell<[Memblock; MemblockAllocator::MAX_MEMBLOCKS_LEN]> = 
-            SyncUnsafeCell::new([Memblock::empty(); MemblockAllocator::MAX_MEMBLOCKS_LEN]);
-
-        let free_blocks: Memblocks<'_>;
-        let reserved_blocks: Memblocks<'_>;
-
-        unsafe {
-            free_blocks = Memblocks::new(
-                FREE_BLOCKS.get().as_mut_unchecked().as_mut_slice()); 
-            reserved_blocks = Memblocks::new(
-                RESERVED_BLOCKS.get().as_mut_unchecked().as_mut_slice());
-        }
-
-        MemblockAllocator(
-            spin::Mutex::new(MemblockAllocatorInner { free_blocks, reserved_blocks })
-        )
-    }
-    fn add_free(&self, base: usize, size: usize) -> bool {
-        self.0.lock().free_blocks.put_block(Memblock::new(base, size))
-    }
-    fn add_reserved(&self, base: usize, size: usize) -> bool {
-        self.0.lock().reserved_blocks.put_block(Memblock::new(base, size))
-    }
-    fn allocate(&self, layout: Layout) -> Option<PAddr> {
-        let mut inner_ref = self.0.lock();
-
-        let free_block = inner_ref.free_blocks.cut_block(layout)?;
-        let ret = free_block.base;
-        inner_ref.reserved_blocks.put_block(free_block).then_some(())
-            .expect("A block taken from free_blocks should be valid in reserved blocks");
-
-        Some(PAddr::from(ret))
-    }
-    fn allocate_at
 }

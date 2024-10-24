@@ -1,10 +1,10 @@
 use core::ops::{BitAnd, BitOr, Range, Sub};
 
-use addr::{PAddr, VAddr};
 use multiboot2::BootInformation;
+use paging::{MemoryManager, X86_64MemoryManager};
 use virt::{PhysicalRemapSpace, VirtSpace};
 
-use crate::drivers::vga::VGA_BUFFER;
+use crate::{boot::MemblockAllocator, drivers::vga::VGA_BUFFER};
 use core::fmt::Write as _;
 
 mod phy;
@@ -12,6 +12,8 @@ mod virt;
 mod alloc;
 mod paging;
 mod addr;
+
+pub use addr::{PAddr, VAddr};
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
@@ -23,12 +25,8 @@ extern "C" {
 
 /// Initialize boot time paging, allocator, as well as parse `mbi_ptr` into
 /// `BootInformation`
-pub fn init<'boot>(mbi_ptr: usize) -> BootInformation<'boot> {
-    let boot_info = paging::init(mbi_ptr);
-    write!(VGA_BUFFER.lock(), "paging initalized\n").expect("VGA text mode not available");
-    phy::init(&boot_info);
-    write!(VGA_BUFFER.lock(), "phy initalized\n").expect("VGA text mode not available");
-    boot_info
+pub fn init(boot_info: BootInformation<'_>, boot_alloc: &MemblockAllocator) {
+    let mem_man = unsafe {X86_64MemoryManager::init(boot_alloc)};
 }
 
 #[inline]
@@ -65,7 +63,7 @@ pub fn kernel_size() -> usize {
     kernel_end_vma().addr_sub(kernel_start_vma()).try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
-pub unsafe fn kernel_virt_to_phy(addr: VAddr) -> PAddr {
+pub unsafe fn kernel_v2p(addr: VAddr) -> PAddr {
     unsafe { PAddr::from_usize(addr.into_usize() - KERNEL_OFFSET_VMA) }
 }
 pub fn phy_to_virt(addr: PAddr) -> VAddr {

@@ -3,14 +3,9 @@ use core::{iter, ops::{BitAnd, Range, RangeBounds, RangeInclusive, Sub}, ptr};
 use bitvec::{order::Lsb0, view::BitView as _};
 use derive_more::derive::{From, Into};
 
-#[allow(non_upper_case_globals)]
-pub const KiB: usize = 1 << 10;
-#[allow(non_upper_case_globals)]
-pub const MiB: usize = 1 << 20;
-#[allow(non_upper_case_globals)]
-pub const GiB: usize = 1 << 30;
-#[allow(non_upper_case_globals)]
-pub const TiB: usize = 1 << 40;
+use crate::common::{GiB, KiB, MiB};
+
+
 
 pub trait Addr: Copy + Eq + Ord + Into<usize> + From<usize>{
     fn byte_add(self, x: usize) -> Self;
@@ -83,6 +78,11 @@ impl VAddr {
     }
     pub fn into_ptr<T>(self) -> *mut T {
         self.into_usize() as *mut T
+    }
+    pub fn index_range(self, range: &Range<usize>) -> usize {
+        if range.is_empty() { return 0; }
+        let mask = 1usize.strict_shl(range.end as u32) - 1;
+        (self.0 & mask) >> range.start
     }
 }
 const_impl_addr!(VAddr);
@@ -210,6 +210,25 @@ impl<T: Addr> IntoIterator for Pages<T> {
                 Page::<T>::new(T::from(base), self.size)
             )
     }
+}
+
+pub trait PageAllocator<A: Addr> {
+    /// Allocates contiguous `cnt` of `page_size`-sized pages
+    /// 
+    /// It is guarenteed that an allocated page will not be allocated again for
+    /// the duration of the program.
+    fn allocate(&self, cnt: usize, page_size: PageSize) -> Option<Page<A>>;
+
+    /// Allocates contiguous `cnt` of `page_size`-sized pages which starts 
+    /// at `at`. If the `cnt` pages starting at `at` is not available to 
+    /// allocate, this tries to allocate some other contiguous pages.
+    fn allocate_at(&self, cnt: usize, page_size: PageSize, at: Page<A>) -> Option<Page<A>>;
+
+    /// Deallocate `page`
+    /// 
+    /// # Safety
+    /// `page` should be a page allocated by this allocator.
+    unsafe fn deallocate(&self, page: Page<A>, cnt: usize);
 }
 
 
