@@ -1,49 +1,43 @@
-use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::PhantomPinned, mem, ops::{Add, DerefMut}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
+use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::PhantomPinned, mem, ops::{Add, DerefMut, Range}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
 
 use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
 use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
 use spin::Mutex;
 
-use crate::{boot, mem::{addr::Pages, kernel_end_lma, kernel_size, kernel_start_lma, phy_to_virt}};
+use crate::{boot, common::TiB, mem::kernel_end_lma};
 
-use super::addr::{AddrRange as _, PAddr, PPage, PPages, PRange, PageBitmap, PageSize, VAddr};
+use super::{addr::{Addr, AddrRange as _, AddrSpace,}, kernel_start_lma, p2v, page::{Page, PageBitmap, PageSize, Pager}};
 
-pub(super) static BIT_ALLOCATOR: spin::Mutex<Option<BitmapAllocator>> = spin::Mutex::new(None);
+pub(super) static BIT_ALLOCATOR: spin::Mutex<Option<BitmapPager>> = spin::Mutex::new(None);
 
 pub(super) fn init(mbi_ptr: usize) {
     todo!()
 }
 
-/// An page aligned allocator for physical memory
-pub trait Allocator {
-    /// Allocates contiguous `cnt` of `page_size`-sized pages
-    /// 
-    /// It is guarenteed that an allocated page will not be allocated again for
-    /// the duration of the program.
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PPage>;
-
-    /// Allocates contiguous `cnt` of `page_size`-sized pages which starts 
-    /// at `at`. If the `cnt` pages starting at `at` is not available to 
-    /// allocate, this tries to allocate some other contiguous pages.
-    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage>;
-
-    /// Deallocate `page`
-    /// 
-    /// # Safety
-    /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate_pages(&self, page: PPage, cnt: usize);
+pub trait PhySpace: AddrSpace {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LinearSpace;
+impl PhySpace for LinearSpace {}
+impl AddrSpace for LinearSpace {
+    const RANGE: Range<usize> = {
+        let start = 0;
+        let end = 64 * TiB;
+        start .. end
+    };
 }
+
+type PAddr = Addr<LinearSpace>;
 
 /// Find the initial free memory areas.
 /// 
 /// Note this only considers the memory usage before `kmain` is called.
 fn initial_free_memory_areas<'boot>(
     boot_info: &'boot BootInformation
-) -> impl Iterator<Item = PRange> + 'boot{
+) -> impl Iterator<Item = Range<PAddr>> + 'boot{
     let mbi_range = unsafe {
-        let start = PAddr::from_usize(boot_info.start_address());
-        let end = PAddr::from_usize(boot_info.end_address());
+        let start = PAddr::new(boot_info.start_address());
+        let end = PAddr::new(boot_info.end_address());
         start .. end
     };
     let memory_areas = boot_info.memory_map_tag()
@@ -57,8 +51,8 @@ fn initial_free_memory_areas<'boot>(
             area.typ() == available
         )
         .map(|area| unsafe {
-            let start = PAddr::from_usize(area.start_address() as usize);
-            let end = PAddr::from_usize(area.end_address() as usize);
+            let start = PAddr::new(area.start_address() as usize);
+            let end = PAddr::new(area.end_address() as usize);
             start .. end
         })
         .flat_map(move |range| range.range_sub(kernel_area.clone()))
@@ -68,7 +62,7 @@ fn initial_free_memory_areas<'boot>(
 }
 
 /// Find the initial range of available physical memory
-fn initial_memory_range(boot_info: &BootInformation) -> PRange {
+fn initial_memory_range(boot_info: &BootInformation) -> Range<PAddr> {
     let memory_areas = boot_info.memory_map_tag()
         .expect("BootInformation should include memory map").memory_areas();
 
@@ -80,20 +74,20 @@ fn initial_memory_range(boot_info: &BootInformation) -> PRange {
     assert!(min < max, "BootInformation memory map should not be empty");
 
     unsafe {
-        PAddr::from_usize(min) .. PAddr::from_usize(max+1)
+        PAddr::new(min) .. PAddr::new(max+1)
     }
 }
 
-type PPageBitmap = PageBitmap<{BitmapAllocator::PAGE_SIZE.into_usize()}, PAddr>;
+type PPageBitmap = PageBitmap<{BitmapPager::PAGE_SIZE.usize()}, LinearSpace>;
 
 /// Page allocator backed by a bitmap over the managed pages.
 /// 
 /// Note that this allocator only supports the page size `Self::PAGE SIZE`, 
 /// and will panic when called with any other page sizes.
-pub(super) struct BitmapAllocator {
+pub(super) struct BitmapPager {
     bitmap: spin::Mutex<&'static mut PPageBitmap>
 }
-impl BitmapAllocator {
+impl BitmapPager {
     const PAGE_SIZE: PageSize = PageSize::Small;
 
     fn new(boot_info: &BootInformation) -> Self {
@@ -113,7 +107,7 @@ impl BitmapAllocator {
             panic!("System should have enough memory to hold a PageBitmap");
         };
 
-        let bitmap_addr = phy_to_virt(bitmap_pages.start());
+        let bitmap_addr = p2v(bitmap_pages.start());
         let bitmap_ref = unsafe { 
             PageBitmap::init(
                 bitmap_addr.into_ptr(), 
@@ -132,47 +126,57 @@ impl BitmapAllocator {
         Self {bitmap: spin::Mutex::new(bitmap_ref)}
     }
 }
-impl Allocator for BitmapAllocator {
-    fn allocate_pages(&self, size: usize, page_size: PageSize) -> Option<PPage> {
+impl Pager<LinearSpace> for BitmapPager {
+    fn allocate_pages(&self, size: usize, page_size: PageSize) -> Option<Page<LinearSpace>> {
         assert!(page_size == Self::PAGE_SIZE);
-        let page_byte_size = page_size.into_usize();
+        let page_byte_size = page_size.usize();
 
         let page_cnt = size.div_ceil(page_byte_size);
         let base = self.bitmap.lock().find_unoccupied(page_cnt)?;
         unsafe { self.bitmap.lock().set_unchecked(base, page_cnt, true) };
 
-        Some(PPage::new(base, page_size))
+        Some(Page::new(base, page_size))
     }
     
-    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage> {
+    fn allocate_pages_at(
+        &self, 
+        cnt: usize, 
+        page_size: PageSize, 
+        at: Page<LinearSpace>
+    ) -> Option<Page<LinearSpace>> {
         todo!()
     }
 
-    unsafe fn deallocate_pages(&self, page: PPage, cnt: usize) {
-        let size = cnt * Self::PAGE_SIZE.into_usize();
+    unsafe fn deallocate_pages(&self, page: Page<LinearSpace>, cnt: usize) {
+        let size = cnt * Self::PAGE_SIZE.usize();
         self.bitmap.lock().set(page.start(), size, false);
     }
 }
 
-impl Allocator for boot::MemblockAllocator<'_> {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PPage> {
+impl Pager<LinearSpace> for boot::MemblockAllocator<'_> {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<Page<LinearSpace>> {
         let layout = Layout::from_size_align(
-            cnt * page_size.into_usize(), 
+            cnt * page_size.usize(), 
             page_size.alignment()
         ).expect("page_size should convert to a valid layout");
-        self.allocate(layout).map(|addr| PPage::new(addr, page_size))
+        self.allocate(layout).map(|addr| Page::new(addr, page_size))
     }
 
-    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PPage) -> Option<PPage> {
+    fn allocate_pages_at(
+        &self, 
+        cnt: usize, 
+        page_size: PageSize, 
+        at: Page<LinearSpace>
+    ) -> Option<Page<LinearSpace>> {
         let layout = Layout::from_size_align(
-            cnt * page_size.into_usize(), 
+            cnt * page_size.usize(), 
             page_size.alignment()
         ).expect("page_size should convert to a valid layout");
-        self.allocate_at(layout, at.start().into_usize())
-            .map(|addr| PPage::new(addr, page_size))
+        self.allocate_at(layout, at.start().usize())
+            .map(|addr| Page::new(addr, page_size))
     }
 
-    unsafe fn deallocate_pages(&self, page: PPage, _cnt: usize) {
+    unsafe fn deallocate_pages(&self, page: Page<LinearSpace>, _cnt: usize) {
         unsafe {self.deallocate(page.start())};
     }
 }

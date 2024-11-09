@@ -1,6 +1,6 @@
 use core::{alloc::Layout, cell::SyncUnsafeCell};
 
-use crate::mem::{self, PAddr};
+use crate::mem::{self, addr::Addr, LinearSpace};
 
 /// An extent of memory used in `MemblockAllocator``. Note present `Memblock` 
 /// is considered greater than not present `Memblock`
@@ -215,7 +215,8 @@ impl<'boot> MemblockAllocatorBuilder<'boot> {
         self.0
     }
 }
-
+  
+type PAddr = Addr<LinearSpace>;
 pub struct MemblockAllocator<'boot>(spin::Mutex<Inner<'boot>>);
 impl MemblockAllocator<'_> {
     const MAX_MEMBLOCKS_LEN: usize = 128;
@@ -228,7 +229,7 @@ impl MemblockAllocator<'_> {
         inner_ref.reserved_blocks.put_block(free_block).then_some(())
             .expect("A block taken from free_blocks should be valid in reserved_blocks");
 
-        Some(PAddr::from(ret))
+        Some(PAddr::new(ret))
     }
     pub fn allocate_at(&self, layout: Layout, at: usize) -> Option<PAddr> {
         let mut inner_ref = self.0.lock();
@@ -238,7 +239,7 @@ impl MemblockAllocator<'_> {
         inner_ref.reserved_blocks.put_block(free_block).then_some(())
             .expect("A block taken from free_blocks should be valid in reserved_blocks");
 
-        Some(PAddr::from(ret))
+        Some(PAddr::new(ret))
     }
 
     /// Deallocate allocation at `addr`
@@ -248,7 +249,7 @@ impl MemblockAllocator<'_> {
     pub unsafe fn deallocate(&self, addr: PAddr) {
         let mut inner_ref = self.0.lock();
 
-        let freed_block = inner_ref.reserved_blocks.take_block(addr.into())
+        let freed_block = inner_ref.reserved_blocks.take_block(addr.usize())
             .expect("MemblockAllocator should deallocate a currently allocated block");
         inner_ref.free_blocks.put_block(freed_block).then_some(())
             .expect("A block taken from reserved_blocks should be valid in free_blocks");

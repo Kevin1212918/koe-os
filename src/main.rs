@@ -5,6 +5,7 @@
 
 use core::fmt::Write as _;
 
+use common::hlt;
 use multiboot2::{BootInformation, BootInformationHeader, MemoryAreaType};
 
 mod common;
@@ -35,7 +36,7 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     write!(VGA_BUFFER.lock(), "mem initalized\n");
     
     drop(boot_alloc);
-    loop {}
+    hlt()
 }
 
 fn initialize_boot_allocator<'boot> (

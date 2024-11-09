@@ -5,87 +5,92 @@
 //! |:------------------------------------|--------------------------:|:-----:|
 //! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Remap      | 64 TB |
 //! |0xFFFFC90000000000:0xFFFFE90000000000|VAlloc                     | 32 TB |
-//! |0xFFFFFE8000000000:0xFFFFFE9000000000|Recursive Paging           | 0.5TB |
+//! |0xFFFFFE8000000000:0xFFFFFF0000000000|Recursive Paging           | 0.5TB |
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
-use core::{marker::PhantomData, sync::atomic::AtomicUsize};
+use core::{marker::PhantomData, ops::Range, sync::atomic::AtomicUsize};
 
 use derive_more::derive::{Into, Sub};
 use multiboot2::BootInformation;
 
-use crate::mem::{addr::{AddrRange, PAddr, PRange}, phy, phy_to_virt};
+use crate::mem::{addr::{AddrRange}, phy};
 
-use super::addr::{PageAllocator, PageBitmap, PageSize, VAddr, VPage, VPages, VRange};
+use super::{addr::{Addr, AddrSpace}, page::{Page, PageSize, Pager}};
 
-pub trait VirtSpace {
-    const RANGE: VRange;
-}
+pub trait VirtSpace: AddrSpace {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VAllocSpace;
-impl VirtSpace for VAllocSpace {
-    const RANGE: VRange = {
-        let start = unsafe{VAddr::from_usize(0xFFFF_C900_0000_0000)};
-        let end = unsafe{VAddr::from_usize(0xFFFF_E900_0000_0000)};
+impl VirtSpace for VAllocSpace {}
+impl AddrSpace for VAllocSpace {
+    const RANGE: Range<usize> = {
+        let start = 0xFFFF_C900_0000_0000;
+        let end = 0xFFFF_E900_0000_0000;
         start .. end
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelSpace;
 impl KernelSpace {
-    pub fn v2p(vaddr: VAddr) -> PAddr {
-        assert!(Self::RANGE.contains(&vaddr));
+    pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::LinearSpace> {
+        assert!(Self::RANGE.contains(&vaddr.usize()));
         
-        PAddr::from(vaddr.addr_sub(Self::RANGE.start) as usize)
+        Addr::new(vaddr.usize() - Self::RANGE.start)
     }
 }
-impl VirtSpace for KernelSpace {
-    const RANGE: VRange = {
-        let start = unsafe{VAddr::from_usize(0xFFFF_FFFF_8000_0000)};
-        let end = unsafe{VAddr::from_usize(0xFFFF_FFFF_FF60_0000)};
+impl VirtSpace for KernelSpace {}
+impl AddrSpace for KernelSpace {
+    const RANGE: Range<usize> = {
+        let start = 0xFFFF_FFFF_8000_0000;
+        let end = 0xFFFF_FFFF_FF60_0000;
         start .. end
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysicalRemapSpace;
 impl PhysicalRemapSpace {
-    pub const OFFSET: usize = Self::RANGE.start.into_usize();
+    pub const OFFSET: usize = Self::RANGE.start;
 }
-impl VirtSpace for PhysicalRemapSpace {
-    const RANGE: VRange = {
-        let start = unsafe{VAddr::from_usize(0xFFFF_8880_0000_0000)};
-        let end = unsafe{VAddr::from_usize(0xFFFF_C880_0000_0000)};
+impl VirtSpace for PhysicalRemapSpace {}
+impl AddrSpace for PhysicalRemapSpace {
+    const RANGE: Range<usize> = {
+        let start = 0xFFFF_8880_0000_0000;
+        let end = 0xFFFF_C880_0000_0000;
         start .. end
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecursivePagingSpace;
-impl VirtSpace for RecursivePagingSpace {
-    const RANGE: VRange = {
-        let start = unsafe {VAddr::from_usize(0xFFFF_FE80_0000_0000)};
-        let end = unsafe {VAddr::from_usize(0xFFFF_FE80_0000_0000)};
+impl VirtSpace for RecursivePagingSpace {}
+impl AddrSpace for RecursivePagingSpace {
+    const RANGE: Range<usize> = {
+        let start = 0xFFFF_FE80_0000_0000;
+        let end = 0xFFFF_FF00_0000_0000;
         start .. end
     };
 }
-
 
 
 pub struct BrkAllocator<S: VirtSpace> {
     brk: AtomicUsize,
     _space: PhantomData<S>,
 }
-impl <S: VirtSpace> PageAllocator<VAddr> for BrkAllocator<S> {
-    fn allocate(&self, cnt: usize, page_size: PageSize) -> Option<VPage> {
+impl<S: VirtSpace> Pager<S> for BrkAllocator<S> {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<Page<S>> {
         use core::sync::atomic::Ordering;
 
-        let size = cnt.checked_mul(page_size.into_usize())?;
+        let size = cnt.checked_mul(page_size.usize())?;
         let align = page_size.alignment();
         loop {
             let old_brk = self.brk.load(Ordering::Relaxed);
-            let ret_addr = VAddr::from(old_brk.checked_next_multiple_of(align)?);
+            let ret_addr = Addr::new(old_brk.checked_next_multiple_of(align)?);
 
-            if (S::RANGE.end.addr_sub(ret_addr) as usize) < size {
+            if (S::RANGE.end - ret_addr.usize()) < size {
                 return None;
             } 
-            let new_brk = ret_addr.into_usize() + size;
+            let new_brk = ret_addr.usize() + size;
 
             let res = self.brk.compare_exchange_weak(
                 old_brk, 
@@ -94,22 +99,22 @@ impl <S: VirtSpace> PageAllocator<VAddr> for BrkAllocator<S> {
                 Ordering::Relaxed
             );
             if res.is_ok() {
-                return Some(VPage::new(ret_addr, page_size))
+                return Some(Page::new(ret_addr, page_size))
             }
         }
 
     }
     
-    fn allocate_at(&self, _: usize, _: PageSize, _: VPage) -> Option<VPage> {
+    fn allocate_pages_at(&self, _: usize, _: PageSize, _: Page<S>) -> Option<Page<S>> {
         panic!("BrkAllocator does not implement allocate_at");
     }
 
-    unsafe fn deallocate(&self, addr: VPage, cnt: usize) {
+    unsafe fn deallocate_pages(&self, addr: Page<S>, cnt: usize) {
         use core::sync::atomic::Ordering;
 
         let old_brk = self.brk.load(Ordering::Relaxed);
-        let new_brk = old_brk - (addr.size().into_usize() * cnt);
-        let new_brk = new_brk - (new_brk % addr.size().into_usize());
+        let new_brk = old_brk - (addr.size().usize() * cnt);
+        let new_brk = new_brk - (new_brk % addr.size().usize());
 
         self.brk.compare_exchange(
             old_brk, 

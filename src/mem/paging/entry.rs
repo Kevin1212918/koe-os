@@ -1,7 +1,7 @@
 use bitvec::{order::Lsb0, view::BitView};
 use derive_more::derive::{From, Into};
 
-use crate::{common::{GiB, KiB, MiB}, mem::PAddr};
+use crate::{common::{GiB, KiB, MiB}, mem::{addr::Addr, LinearSpace}};
 
 use super::Level;
 
@@ -62,7 +62,7 @@ impl<'a> EntryRef<'a> {
             _ => 0x0000_FFFF_FFFF_F000,
         };
 
-        let addr = PAddr::from(self.raw.0 & mask);
+        let addr = Addr::new(self.raw.0 & mask);
 
         match (self.level, is_page) {
             (PT, None) |
@@ -82,7 +82,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub unsafe fn set_addr(&mut self, addr: PAddr) -> bool {
+    pub unsafe fn set_addr(&mut self, addr: Addr<LinearSpace>) -> bool {
         use EntryTarget::*;
         use Level::*;
 
@@ -100,7 +100,7 @@ impl<'a> EntryRef<'a> {
         let mask = !((1 << 48) - align);
 
         self.raw.0 &= mask;
-        self.raw.0 |= addr.into_usize();
+        self.raw.0 |= addr.usize();
 
         true
     }
@@ -176,7 +176,7 @@ impl<'a> EntryRef<'a> {
     pub unsafe fn init<const N: usize> (
         raw: &'a mut RawEntry,
         level: Level, 
-        addr: PAddr, 
+        addr: Addr<LinearSpace>, 
         flags: [Flag; N]
     ) -> Option<Self> {
         let mut new = unsafe {Self::from_raw(raw, level)};
@@ -191,7 +191,7 @@ impl<'a> EntryRef<'a> {
     /// of `typ` and `flags`
     pub unsafe fn reinit<const N: usize> (
         &mut self,
-        addr: PAddr, 
+        addr: Addr<LinearSpace>, 
         flags: [Flag; N]
     ) -> Option<()> {
         let present_bit = flags.iter()
@@ -220,8 +220,8 @@ impl<'a> EntryRef<'a> {
 /// Reference target of a paging table entry
 pub enum EntryTarget {
     None,
-    Table(Level, PAddr),
-    Page(Level, PAddr)
+    Table(Level, Addr<LinearSpace>),
+    Page(Level, Addr<LinearSpace>)
 }
 
 /// A flag in a page entry. Currently supports `Present`, `ReadWrite`, 

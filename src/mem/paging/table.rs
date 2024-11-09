@@ -1,6 +1,6 @@
 use core::ops::IndexMut;
 
-use crate::{common::KiB, mem::VAddr};
+use crate::{common::KiB, mem::{addr::Addr, virt::VirtSpace}};
 
 use super::{entry::{EntryRef, RawEntry}, Level};
 
@@ -30,7 +30,7 @@ impl<'a> TableRef<'a> {
     
     /// For a `Table` of the given `typ`, get the `PageEntry` indexed by 
     /// `addr`
-    pub fn index_with_vaddr(self, addr: VAddr) -> EntryRef<'a> {
+    pub fn index_with_vaddr<S: VirtSpace>(self, addr: Addr<S>) -> EntryRef<'a> {
         let idx_range = self.level.page_table_idx_range();
         let idx = addr.index_range(&idx_range);
         debug_assert!(idx < self.data.0.len());

@@ -1,19 +1,22 @@
-use core::ops::{BitAnd, BitOr, Range, Sub};
+use core::ops::{Add, BitAnd, BitOr, Range, Sub};
 
+use addr::Addr;
 use multiboot2::BootInformation;
-use paging::{MemoryManager, X86_64MemoryManager};
-use virt::{PhysicalRemapSpace, VirtSpace};
+use page::{Page, PageSize, Pager};
+use paging::{Flag, MemoryManager, X86_64MemoryManager};
+use virt::{KernelSpace, PhysicalRemapSpace, VAllocSpace, VirtSpace};
 
-use crate::{boot::MemblockAllocator, drivers::vga::VGA_BUFFER};
+use crate::{boot::MemblockAllocator, common::hlt, drivers::vga::VGA_BUFFER};
 use core::fmt::Write as _;
 
 mod phy;
 mod virt;
 mod alloc;
 mod paging;
-mod addr;
+pub mod addr;
+pub mod page;
 
-pub use addr::{PAddr, VAddr};
+pub use phy::LinearSpace;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
@@ -34,28 +37,28 @@ pub const fn kernel_offset_vma() -> usize {
     KERNEL_OFFSET_VMA
 }
 #[inline]
-pub fn kernel_start_vma() -> VAddr {
+pub fn kernel_start_vma() -> Addr<KernelSpace> {
     // SAFETY: _KERNEL_START_VMA is on symbol table created by linker. The
     // address of the symbol is the virtual memory address of kernel.
-    VAddr::from_ref(unsafe { &_KERNEL_START_VMA })
+    Addr::from_ref(unsafe { &_KERNEL_START_VMA })
 }
 #[inline]
-pub fn kernel_end_vma() -> VAddr {
+pub fn kernel_end_vma() -> Addr<KernelSpace> {
     // SAFETY: _KERNEL_END_VMA is on symbol table created by linker. The
     // address of the symbol is the virtual memory address of kernel.
-    VAddr::from_ref(unsafe { &_KERNEL_END_VMA })
+    Addr::from_ref(unsafe { &_KERNEL_END_VMA })
 }
 #[inline]
-pub fn kernel_start_lma() -> PAddr {
+pub fn kernel_start_lma() -> Addr<LinearSpace> {
     // SAFETY: _KERNEL_START_LMA is on symbol table created by linker. The
     // address of the symbol is the load memory address of kernel, which 
     // should be loaded during real mode at the actual physical address
     unsafe {
-        PAddr::from_usize(&_KERNEL_START_LMA as *const u8 as usize)
+        Addr::new(&_KERNEL_START_LMA as *const u8 as usize)
     }
 }
 #[inline]
-pub fn kernel_end_lma() -> PAddr {
+pub fn kernel_end_lma() -> Addr<LinearSpace> {
     kernel_start_lma().byte_add(kernel_size())
 }
 #[inline]
@@ -63,10 +66,10 @@ pub fn kernel_size() -> usize {
     kernel_end_vma().addr_sub(kernel_start_vma()).try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
-pub unsafe fn kernel_v2p(addr: VAddr) -> PAddr {
-    unsafe { PAddr::from_usize(addr.into_usize() - KERNEL_OFFSET_VMA) }
+pub unsafe fn kernel_v2p(addr: Addr<KernelSpace>) -> Addr<LinearSpace> {
+    Addr::new(addr.usize() - KERNEL_OFFSET_VMA)
 }
-pub fn phy_to_virt(addr: PAddr) -> VAddr {
-    let vaddr = addr.byte_add(PhysicalRemapSpace::OFFSET).into_usize();
-    unsafe { VAddr::from_usize(vaddr) }
+pub fn p2v(addr: Addr<LinearSpace>) -> Addr<PhysicalRemapSpace> {
+    let vaddr = addr.byte_add(PhysicalRemapSpace::OFFSET).usize();
+    Addr::new(vaddr)
 }

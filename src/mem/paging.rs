@@ -4,18 +4,20 @@ use core::{arch::asm, cell::{SyncUnsafeCell, UnsafeCell}, iter, ops::{Deref, Der
 
 use bitvec::{array::BitArray, order::Lsb0, view::BitView};
 use derive_more::derive::{From, Into};
-use entry::{EntryRef, EntryTarget, Flag, RawEntry};
+use entry::{EntryRef, EntryTarget, RawEntry};
 use multiboot2::BootInformation;
-use table::{RawTable, TableRef};
+use table::{RawTable, TableRef, TABLE_ALIGNMENT};
 
-use crate::{boot::MemblockAllocator, common::hlt, drivers::vga::VGA_BUFFER, mem::{kernel_end_lma, kernel_end_vma, kernel_size, kernel_start_lma, kernel_start_vma, phy::Allocator, phy_to_virt, virt::KernelSpace}};
+use crate::{boot::MemblockAllocator, common::hlt, drivers::vga::VGA_BUFFER, mem::{addr::AddrSpace, kernel_end_lma, kernel_end_vma, kernel_size, kernel_start_lma, kernel_start_vma, virt::KernelSpace}};
 
 use core::fmt::Write as _;
 
-use super::{addr::{PAddr, PPage, PageSize, VAddr, VPage}, phy, virt::{RecursivePagingSpace, VirtSpace}};
+use super::{addr::Addr, page::{Page, PageSize, Pager}, phy, virt::{RecursivePagingSpace, VirtSpace}, LinearSpace};
 
 mod entry;
 mod table;
+
+pub use entry::Flag;
 
 pub trait MemoryManager {
     /// Initialize `MemoryManager`
@@ -32,11 +34,12 @@ pub trait MemoryManager {
     /// 
     /// # Panics
     /// - `page_size` should be supported by the `MemoryManager`
-    unsafe fn map(
+    unsafe fn map<V: VirtSpace, const N: usize>(
         &self, 
-        vpage: VPage, 
-        ppage: PPage, 
-        allocator: &impl phy::Allocator
+        vpage: Page<V>, 
+        ppage: Page<LinearSpace>, 
+        flags: [Flag; N],
+        allocator: &impl Pager<LinearSpace>,
     ) -> Option<()>;
 
     /// Removes mapping at `vaddr`.
@@ -48,11 +51,11 @@ pub trait MemoryManager {
     /// 
     /// # Panics
     /// May panic if `vaddr` is not mapped.
-    unsafe fn unmap(&self, vaddr: VAddr);
+    unsafe fn unmap<V: VirtSpace>(&self, vaddr: Addr<V>);
 
     /// Try translating a virtual address into a physical address. Fails iff 
     /// the virtual address is not mapped.
-    fn translate(&self, vaddr: VAddr) -> Option<PAddr>;
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>>;
 }
 
 //---------------------------- x86-64 stuff below ---------------------------//
@@ -83,25 +86,23 @@ impl MemoryManager for X86_64MemoryManager {
 
         // Setting up kernel text mapping
 
-        let kernel_space_start = KernelSpace::RANGE.start;
+        let kernel_space_start = Addr::new(KernelSpace::RANGE.start);
 
         let mut kernel_pml4_ent = pml4.reborrow().index_with_vaddr(kernel_space_start);
-        let pdpt_vaddr = VAddr::from(PDPT_TABLE.get() as usize);
+        let pdpt_vaddr = Addr::new(PDPT_TABLE.get() as usize);
         unsafe { kernel_pml4_ent.reinit(
             KernelSpace::v2p(pdpt_vaddr), 
             DEFAULT_PAGE_TABLE_FLAGS
         )}.expect("kpml4 fail");
 
         let mut kernel_pdpt_ent = pdpt.index_with_vaddr(kernel_space_start);
-        let pd_vaddr = VAddr::from(PD_TABLE.get() as usize);
+        let pd_vaddr = Addr::new(PD_TABLE.get() as usize);
         unsafe { kernel_pdpt_ent.reinit(
             KernelSpace::v2p(pd_vaddr), 
             DEFAULT_PAGE_TABLE_FLAGS
         )}.expect("kpdpt fail");
 
-
-
-        let kernel_page_size = Level::PD.page_size().into_usize();
+        let kernel_page_size = Level::PD.page_size().usize();
         const KERNEL_PAGE_FLAGS: [Flag; 4] = [
             Flag::Present,
             Flag::PageSize,
@@ -117,16 +118,16 @@ impl MemoryManager for X86_64MemoryManager {
 
             let mut kernel_pd_ent = pd.reborrow().index_with_vaddr(kernel_map_addr);
             unsafe { kernel_pd_ent.reinit(kernel_page_paddr, KERNEL_PAGE_FLAGS)
-                .unwrap_or_else(|| panic!("kpd fail: {:#x}", kernel_page_paddr.into_usize())); }
+                .unwrap_or_else(|| panic!("kpd fail: {:#x}", kernel_page_paddr.usize())); }
 
             kernel_map_addr = kernel_map_addr.byte_add(kernel_page_size);
         }
-        write!(VGA_BUFFER.lock(), "pd_end_addr: {:#x}\n", kernel_map_addr.into_usize());
-
         // Setting up recursive mapping
 
-        let mut mapping_ent = pml4.index_with_vaddr(RecursivePagingSpace::RANGE.start);
-        let pml4_vaddr = VAddr::from(PML4_TABLE.get() as usize);
+        let mut mapping_ent = pml4.index_with_vaddr(
+            Addr::<RecursivePagingSpace>::new(RecursivePagingSpace::RANGE.start));
+
+        let pml4_vaddr = Addr::new(PML4_TABLE.get() as usize);
         unsafe { mapping_ent.reinit(
             KernelSpace::v2p(pml4_vaddr), 
             DEFAULT_PAGE_TABLE_FLAGS
@@ -141,45 +142,64 @@ impl MemoryManager for X86_64MemoryManager {
         )}.expect("cr3 fail");
 
         let mut page_structure = PageStructure(cr3_raw);
-        write!(VGA_BUFFER.lock(), "cr3_raw: {:#x}\n", cr3_raw.0);
-        write!(VGA_BUFFER.lock(), "pml4_addr: {:#x}\n", pml4_vaddr.into_usize());
         page_structure.store_cr3();
         let memory_manager = X86_64MemoryManager(MemManMutex::new(page_structure));
 
         memory_manager
     }
 
-    unsafe fn map(
+    unsafe fn map<V: VirtSpace, const N: usize>(
         &self, 
-        vpage: VPage, 
-        ppage: PPage, 
-        allocator: &impl phy::Allocator
+        vpage: Page<V>, 
+        ppage: Page<LinearSpace>, 
+        flags: [Flag; N],
+        allocator: &impl Pager<LinearSpace>,
     ) -> Option<()> {
+        debug_assert!(vpage.size() == ppage.size());
+
+
+        let mut page_structure = self.0.lock();
+        let mut walker = unsafe { 
+            Walker::new(&mut page_structure, vpage.start()) };
+
+        let mut cur_level = walker.cur().get_level();
+        let target_level = Level::from_page_size(vpage.size());
+
+        while cur_level != target_level {
+            walker.down(allocator);
+            cur_level = walker.cur().get_level();
+        }
+
+        unsafe { walker.cur().reinit(ppage.start(), flags) };
+        page_structure.invalidate_tlb();
+
+        Some(())
+    }
+
+    unsafe fn unmap<V: VirtSpace>(&self, vaddr: Addr<V>) {
         todo!()
     }
-    
-    unsafe fn unmap(&self, vaddr: VAddr) {
-        todo!()
-    }
-    
-    fn translate(&self, vaddr: VAddr) -> Option<PAddr> {
+
+    /// Try translating a virtual address into a physical address. Fails iff 
+    /// the virtual address is not mapped.
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>> {
         todo!()
     }
 }
 
-struct Walker<'a> {
-    target_vaddr: VAddr, 
+struct Walker<'a, T: VirtSpace> {
+    target_vaddr: Addr<T>, 
     cur_entry: EntryRef<'a>,
 }
 
-impl<'a> Walker<'a> {
+impl<'a, T: VirtSpace> Walker<'a, T> {
     /// Creates a new [`Walker`] to access page entries along `target_vaddr`
     /// 
     /// # Safety
     /// This walker requires recursive paging at `RecursivePagingSpace`
     unsafe fn new(
         page_structure: &'a mut PageStructure, 
-        target_vaddr: VAddr,
+        target_vaddr: Addr<T>,
     ) -> Self {
         let cur_entry = page_structure.get_cr3_ent();
         Self {
@@ -188,25 +208,19 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn cur(&'a mut self) -> &'a mut EntryRef<'a> { &mut self.cur_entry }
+    fn cur(&mut self) -> &mut EntryRef<'a> { &mut self.cur_entry }
     fn try_down(&'a mut self) -> Option<&'a mut EntryRef<'a>> {
-        let target = self.cur_entry.get_target();
-        let EntryTarget::Table(table_level, _) = target else {
-            return None;
-        };
-        let table_base_offset = table_level.page_table_idx_range().end;
-        let table_base_addr = VAddr::from(
-            self.target_vaddr.into_usize() << table_base_offset);
-        
-        let table_vaddr = recursive_table_vaddr(table_level, table_base_addr);
-        let raw_table: &'a mut RawTable = unsafe {table_vaddr.into_ptr::<RawTable>().as_mut_unchecked()};
-        let table: TableRef<'a> = unsafe {TableRef::from_raw(table_level, raw_table)};
-
-        self.cur_entry = table.index_with_vaddr(self.target_vaddr);
-        Some(self.cur())
+        self.cur_entry.get_level().next_level()
+            .map(|_| self.cur_entry.get_target())
+            .filter(|target| matches!(target, EntryTarget::Table(..)))
+            .map(|_| unsafe { self.down_unchecked() })
     }
 
-    fn down(&'a mut self, alloc: &impl phy::Allocator) -> &'a mut EntryRef<'a> {
+    fn down(&mut self, alloc: &impl Pager<LinearSpace>) -> &mut EntryRef<'a> {
+        if self.cur_entry.get_level().next_level().is_none() {
+            return self.cur();
+        }
+
         let target = self.cur_entry.get_target();
         match target {
             EntryTarget::None |
@@ -216,16 +230,37 @@ impl<'a> Walker<'a> {
             },
             EntryTarget::Table(..) => (),
         }
-        self.try_down().expect("try_down should succeed when cur_entry is table")
+        unsafe { self.down_unchecked() }
+    }
+
+    unsafe fn down_unchecked(&mut self) -> &mut EntryRef<'a> {
+        let table_level = self.cur_entry.get_level().next_level()
+            .expect("Walker::down_unchecked should not be called when \
+                         walker is at lowest level");
+
+        let table_vaddr = recursive_table_vaddr(table_level, self.target_vaddr);
+        let raw_table: &'a mut RawTable = unsafe {table_vaddr.into_ptr::<RawTable>().as_mut_unchecked()};
+        let table: TableRef<'a> = unsafe {TableRef::from_raw(table_level, raw_table)};
+
+        self.cur_entry = table.index_with_vaddr(self.target_vaddr);
+        self.cur()
     }
 }
 
 /// # Undefined Behavior
 /// - `table_level` is not a valid level for page table
-fn recursive_table_vaddr(table_level: Level, table_base_addr: VAddr) -> VAddr {
-    assert!(!RecursivePagingSpace::RANGE.contains(&table_base_addr));
+fn recursive_table_vaddr<S: VirtSpace>(
+    table_level: Level, 
+    target_addr: Addr<S>,
+) -> Addr<RecursivePagingSpace> {
+    assert!(!RecursivePagingSpace::RANGE.contains(&target_addr.usize()));
+    const TABLE_IDX_SIZE: usize = table::TABLE_LEN.trailing_zeros() as usize;
+    const OFFSET_IDX_SIZE: usize = table::TABLE_SIZE.trailing_zeros() as usize;
+
     let pml4_idx_range = Level::PML4.page_table_idx_range();
-    let recurse_base = RecursivePagingSpace::RANGE.start.index_range(&pml4_idx_range);
+
+    let recurse_base = Addr::<RecursivePagingSpace>::new(RecursivePagingSpace::RANGE.start);
+    let recurse_base = recurse_base.index_range(&pml4_idx_range);
     let recurse_base = recurse_base << pml4_idx_range.start;
 
     // Number of "real" page table lookup 
@@ -234,18 +269,23 @@ fn recursive_table_vaddr(table_level: Level, table_base_addr: VAddr) -> VAddr {
 
     let mut ret: usize = 0;
     for i in 0..recurse_cnt {
-        ret += recurse_base >> (i * 9);
+        ret |= recurse_base >> (i * TABLE_IDX_SIZE);
     }
 
-    const CANONICAL_MASK: usize = 0x0000_FFFF_FFFF_FFFF;
-    let access_base = table_base_addr.into_usize() & CANONICAL_MASK;
-    let access_base = access_base >> (recurse_cnt * 9);
+    const OFFSET_MASK: usize = table::TABLE_ALIGNMENT - 1;
+    const CANONICAL_MASK: usize = 0xFFFF_0000_0000_0000;
+
+    let access_base = target_addr.usize() & !CANONICAL_MASK;
+    let access_base = access_base >> (recurse_cnt * TABLE_IDX_SIZE);
+    let access_base = access_base & !OFFSET_MASK;
 
     ret |= access_base;
-    ret |= !CANONICAL_MASK;
+    // RecursivePagingSpace is in upper half
+    ret |= CANONICAL_MASK;
 
-    debug_assert!(ret % (1 << 12) == 0);
-    VAddr::from(ret)
+    let ret = Addr::new(ret);
+    debug_assert!(ret.is_aligned_to(table::TABLE_ALIGNMENT));
+    ret
 }
 
 struct PageStructure(RawEntry);
@@ -312,7 +352,7 @@ impl Level {
 
         match self {
             CR3 => 
-                panic!("PageEntryTyp::CR3 should not identify a page table level"),
+                panic!("Level::CR3 should not identify a page table level"),
 
             PML4 => 39..48,
             PDPT => 30..39,
@@ -333,7 +373,7 @@ impl Level {
         match self {
             CR3 | 
             PML4 => 
-                panic!("PageEntryTyp::CR3 or PageEntryTyp::PML4 should not \
+                panic!("Level::CR3 or Level::PML4 should not \
                         identify a page level"),
             PDPT => 0..30,
             PD => 0..21,
@@ -352,7 +392,7 @@ impl Level {
             PT => PageSize::Small,
             PD => PageSize::Large,
             PDPT => PageSize::Huge,
-            _ => panic!("an entry of PageEntryTyp cannot reference a page"),
+            _ => panic!("an entry of Level cannot reference a page"),
         }   
     }
 
@@ -367,7 +407,7 @@ impl Level {
             PageSize::Huge => PDPT,
         }
     }
-    /// Get next lower `PageEntryTyp` on the paging hierarchy, with `CR3` being
+    /// Get next lower `Level` on the paging hierarchy, with `CR3` being
     /// the highest.
     pub const fn next_level(self) -> Option<Self> {
         use Level::*;
@@ -380,7 +420,7 @@ impl Level {
         }
     }
 
-    /// Get next higher `PageEntryTyp` on the paging hierarchy, with `CR3` being
+    /// Get next higher `Level` on the paging hierarchy, with `CR3` being
     /// the highest.
     pub const fn prev_level(self) -> Option<Self> {
         use Level::*;

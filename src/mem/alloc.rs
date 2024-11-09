@@ -1,11 +1,3 @@
-use core::{alloc::{AllocError, Allocator, Layout}, ptr::NonNull, slice};
-
-use crate::mem::addr::PAddr;
-
-use super::{addr::{PPage, PageSize}, phy::{self, Allocator as _}, phy_to_virt};
-
-
-
 
 // First fit allocator using only the bitmap physical frame allocator, and 
 // returning virtual memory address in the physical remap space.

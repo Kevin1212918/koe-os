@@ -1,6 +1,6 @@
 use core::{fmt::Write as _, panic::PanicInfo};
 
-use crate::drivers;
+use crate::{common::hlt, drivers};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -10,5 +10,5 @@ fn panic(info: &PanicInfo) -> ! {
     vga_buffer.set_color(Color::Red, Color::Black, true);
     write!(*vga_buffer, "KERNEL PANIC: {}", info.message());
     drop(vga_buffer);
-    loop{}
+    hlt()
 }
