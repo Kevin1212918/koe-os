@@ -7,7 +7,7 @@ use spin::Mutex;
 
 use crate::{boot, common::TiB, mem::kernel_end_lma};
 
-use super::{addr::{Addr, AddrRange as _, AddrSpace,}, kernel_start_lma, p2v, page::{Page, PageBitmap, PageSize, Pager}};
+use super::{addr::{Addr, AddrRange as _, AddrSpace,}, kernel_start_lma, memblock::BootMemoryManager, p2v, page::{Page, PageBitmap, PageSize, Pager}};
 
 pub(super) static BIT_ALLOCATOR: spin::Mutex<Option<BitmapPager>> = spin::Mutex::new(None);
 
@@ -153,7 +153,7 @@ impl Pager<LinearSpace> for BitmapPager {
     }
 }
 
-impl Pager<LinearSpace> for boot::MemblockAllocator<'_> {
+impl Pager<LinearSpace> for BootMemoryManager {
     fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<Page<LinearSpace>> {
         let layout = Layout::from_size_align(
             cnt * page_size.usize(), 

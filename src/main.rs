@@ -6,6 +6,7 @@
 use core::fmt::Write as _;
 
 use common::hlt;
+use mem::memblock::{BootMemoryManager, BootMemoryManagerBuilder};
 use multiboot2::{BootInformation, BootInformationHeader, MemoryAreaType};
 
 mod common;
@@ -29,7 +30,7 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     let boot_info = boot_info.expect("boot info not found");
     write!(VGA_BUFFER.lock(), "boot info found\n");
 
-    let boot_alloc = initialize_boot_allocator(&boot_info);
+    let boot_alloc = initialize_boot_memory_manager(&boot_info);
     write!(VGA_BUFFER.lock(), "boot allocator initialized\n");
 
     mem::init(boot_info, &boot_alloc);
@@ -39,10 +40,10 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     hlt()
 }
 
-fn initialize_boot_allocator<'boot> (
+fn initialize_boot_memory_manager<'boot> (
     boot_info: &BootInformation<'boot>
-) -> boot::MemblockAllocator<'boot> {
-    let builder = boot::MemblockAllocatorBuilder::new()
+) -> BootMemoryManager {
+    let builder = BootMemoryManagerBuilder::new()
         .expect("MemblockAllocator should not have been initialized");
     let memory_map_tag = boot_info.memory_map_tag()
         .expect("boot info should have memory tag");

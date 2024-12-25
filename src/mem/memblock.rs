@@ -2,7 +2,7 @@ use core::{alloc::Layout, cell::SyncUnsafeCell};
 
 use crate::mem::{self, addr::Addr, LinearSpace};
 
-/// An extent of memory used in `MemblockAllocator``. Note present `Memblock` 
+/// An extent of memory used in `BootMemoryManager``. Note present `Memblock` 
 /// is considered greater than not present `Memblock`
 #[derive(Debug, Default, Clone, Copy)]
 struct Memblock {
@@ -41,12 +41,12 @@ impl Memblock {
 }
 
 /// A reference to a sorted array of `Memblock`s.
-struct Memblocks<'boot> {
-    data: &'boot mut [Memblock], 
+struct Memblocks {
+    data: &'static mut [Memblock], 
     len: usize,
 }
-impl<'boot> Memblocks<'boot> {
-    fn new(blocks: &'boot mut [Memblock]) -> Self {
+impl Memblocks {
+    fn new(blocks: &'static mut [Memblock]) -> Self {
         blocks.sort_unstable();
         Self {data: blocks, len: 0}
     }
@@ -170,24 +170,24 @@ impl<'boot> Memblocks<'boot> {
     }
 } 
 
-struct Inner<'boot> {
-    free_blocks: Memblocks<'boot>,
-    reserved_blocks: Memblocks<'boot>,
+struct Inner {
+    free_blocks: Memblocks,
+    reserved_blocks: Memblocks,
 }
-pub struct MemblockAllocatorBuilder<'boot>(MemblockAllocator<'boot>);
-impl<'boot> MemblockAllocatorBuilder<'boot> {
-    pub fn new() -> Option<MemblockAllocatorBuilder<'boot>> {
-        static FREE_BLOCKS: SyncUnsafeCell<[Memblock; MemblockAllocator::MAX_MEMBLOCKS_LEN]> = 
-            SyncUnsafeCell::new([Memblock::empty(); MemblockAllocator::MAX_MEMBLOCKS_LEN]);
-        static RESERVED_BLOCKS: SyncUnsafeCell<[Memblock; MemblockAllocator::MAX_MEMBLOCKS_LEN]> = 
-            SyncUnsafeCell::new([Memblock::empty(); MemblockAllocator::MAX_MEMBLOCKS_LEN]);
+pub struct BootMemoryManagerBuilder(BootMemoryManager);
+impl<'boot> BootMemoryManagerBuilder {
+    pub fn new() -> Option<BootMemoryManagerBuilder> {
+        static FREE_BLOCKS: SyncUnsafeCell<[Memblock; BootMemoryManager::MAX_MEMBLOCKS_LEN]> = 
+            SyncUnsafeCell::new([Memblock::empty(); BootMemoryManager::MAX_MEMBLOCKS_LEN]);
+        static RESERVED_BLOCKS: SyncUnsafeCell<[Memblock; BootMemoryManager::MAX_MEMBLOCKS_LEN]> = 
+            SyncUnsafeCell::new([Memblock::empty(); BootMemoryManager::MAX_MEMBLOCKS_LEN]);
         static IS_INIT: spin::Mutex<bool> = spin::Mutex::new(true);
 
         let mut is_init = IS_INIT.lock();
         if !*is_init { return None; }
         
-        let free_blocks: Memblocks<'_>;
-        let reserved_blocks: Memblocks<'_>;
+        let free_blocks: Memblocks;
+        let reserved_blocks: Memblocks;
 
         unsafe {
             free_blocks = Memblocks::new(
@@ -196,10 +196,10 @@ impl<'boot> MemblockAllocatorBuilder<'boot> {
                 RESERVED_BLOCKS.get().as_mut_unchecked().as_mut_slice());
         }
 
-        let mba = MemblockAllocator(spin::Mutex::new(
+        let mba = BootMemoryManager(spin::Mutex::new(
             Inner { free_blocks, reserved_blocks })
         );
-        let ret = MemblockAllocatorBuilder(mba);
+        let ret = BootMemoryManagerBuilder(mba);
 
         *is_init = false;
         Some(ret)
@@ -211,14 +211,14 @@ impl<'boot> MemblockAllocatorBuilder<'boot> {
     pub fn add_reserved(&self, base: usize, size: usize) -> bool {
         self.0.0.lock().reserved_blocks.put_block(Memblock::new(base, size))
     }
-    pub fn build(self) -> MemblockAllocator<'boot> {
+    pub fn build(self) -> BootMemoryManager {
         self.0
     }
 }
   
 type PAddr = Addr<LinearSpace>;
-pub struct MemblockAllocator<'boot>(spin::Mutex<Inner<'boot>>);
-impl MemblockAllocator<'_> {
+pub struct BootMemoryManager(spin::Mutex<Inner>);
+impl BootMemoryManager {
     const MAX_MEMBLOCKS_LEN: usize = 128;
     
     pub fn allocate(&self, layout: Layout) -> Option<PAddr> {
@@ -250,7 +250,7 @@ impl MemblockAllocator<'_> {
         let mut inner_ref = self.0.lock();
 
         let freed_block = inner_ref.reserved_blocks.take_block(addr.usize())
-            .expect("MemblockAllocator should deallocate a currently allocated block");
+            .expect("BootMemoryManager should deallocate a currently allocated block");
         inner_ref.free_blocks.put_block(freed_block).then_some(())
             .expect("A block taken from reserved_blocks should be valid in free_blocks");
     }

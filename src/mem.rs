@@ -1,18 +1,20 @@
 use core::ops::{Add, BitAnd, BitOr, Range, Sub};
 
 use addr::Addr;
+use memblock::BootMemoryManager;
 use multiboot2::BootInformation;
 use page::{Page, PageSize, Pager};
 use paging::{Flag, MemoryManager, X86_64MemoryManager};
 use virt::{KernelSpace, PhysicalRemapSpace, VAllocSpace, VirtSpace};
 
-use crate::{boot::MemblockAllocator, common::hlt, drivers::vga::VGA_BUFFER};
+use crate::{common::hlt, drivers::vga::VGA_BUFFER};
 use core::fmt::Write as _;
 
 mod phy;
 mod virt;
 mod alloc;
 mod paging;
+pub mod memblock;
 pub mod addr;
 pub mod page;
 
@@ -28,7 +30,7 @@ extern "C" {
 
 /// Initialize boot time paging, allocator, as well as parse `mbi_ptr` into
 /// `BootInformation`
-pub fn init(boot_info: BootInformation<'_>, boot_alloc: &MemblockAllocator) {
+pub fn init(boot_info: BootInformation<'_>, boot_alloc: &BootMemoryManager) {
     let mem_man = unsafe {X86_64MemoryManager::init(boot_alloc)};
 }
 

@@ -8,11 +8,11 @@ use entry::{EntryRef, EntryTarget, RawEntry};
 use multiboot2::BootInformation;
 use table::{RawTable, TableRef, TABLE_ALIGNMENT};
 
-use crate::{boot::MemblockAllocator, common::hlt, drivers::vga::VGA_BUFFER, mem::{addr::AddrSpace, kernel_end_lma, kernel_end_vma, kernel_size, kernel_start_lma, kernel_start_vma, virt::KernelSpace}};
+use crate::{common::hlt, drivers::vga::VGA_BUFFER, mem::{addr::AddrSpace, kernel_end_lma, kernel_end_vma, kernel_size, kernel_start_lma, kernel_start_vma, virt::KernelSpace}};
 
 use core::fmt::Write as _;
 
-use super::{addr::Addr, page::{Page, PageSize, Pager}, phy, virt::{RecursivePagingSpace, VirtSpace}, LinearSpace};
+use super::{addr::Addr, memblock::BootMemoryManager, page::{Page, PageSize, Pager}, phy, virt::{RecursivePagingSpace, VirtSpace}, LinearSpace};
 
 mod entry;
 mod table;
@@ -21,7 +21,7 @@ pub use entry::Flag;
 
 pub trait MemoryManager {
     /// Initialize `MemoryManager`
-    unsafe fn init(boot_alloc: &MemblockAllocator) -> Self;
+    unsafe fn init(boot_alloc: &BootMemoryManager) -> Self;
 
     /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any 
     /// previous virtual page mapping at `vaddr`. 
@@ -69,7 +69,7 @@ type MemManMutex<T> = spin::Mutex<T>;
 pub struct X86_64MemoryManager(MemManMutex<PageStructure>);
 
 impl MemoryManager for X86_64MemoryManager {
-    unsafe fn init(boot_alloc: &MemblockAllocator) -> Self {
+    unsafe fn init(boot_alloc: &BootMemoryManager) -> Self {
         static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PDPT_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PD_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
