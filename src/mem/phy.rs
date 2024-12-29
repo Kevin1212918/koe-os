@@ -89,9 +89,8 @@ struct PhysicalPageManager {
 }
 impl PhysicalPageManager {
     fn new(boot_alloc: &BootMemoryManager, range: PageRange<LinearSpace>) -> Self {
-        
-    }
 
+    }
 }
 
 

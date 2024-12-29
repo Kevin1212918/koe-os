@@ -66,6 +66,8 @@
 
 use core::{alloc::{AllocError, Allocator, Layout}, ptr::NonNull};
 
+use crate::mem::paging::MemoryManager;
+
 use super::{memblock::BootMemoryManager, paging::X86_64MemoryManager, virt::{BumpMemoryManager, VAllocSpace}};
 
 pub(super) struct BootAllocator(&'static spin::Mutex<BootAllocatorInner>);
@@ -84,6 +86,7 @@ unsafe impl Allocator for BootAllocator {
 
         let paddr = inner.pmm.allocate(layout).ok_or(AllocError)?;
         let vaddr = inner.vmm.allocate(layout).ok_or(AllocError)?;
+
 
 
         todo!()
