@@ -3,6 +3,8 @@
 #![feature(const_refs_to_static, ptr_as_ref_unchecked, ptr_metadata, impl_trait_in_assoc_type, sync_unsafe_cell, allocator_api, strict_overflow_ops)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+extern crate alloc;
+
 use core::fmt::Write as _;
 
 use common::hlt;

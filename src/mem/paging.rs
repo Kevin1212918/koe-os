@@ -12,7 +12,7 @@ use crate::{common::hlt, drivers::vga::VGA_BUFFER, mem::{addr::AddrSpace, kernel
 
 use core::fmt::Write as _;
 
-use super::{addr::Addr, memblock::BootMemoryManager, page::{Page, PageSize, Pager}, phy, virt::{RecursivePagingSpace, VirtSpace}, LinearSpace};
+use super::{addr::Addr, memblock::BootMemoryManager, addr::{PageAddr, PageManager, PageSize}, phy, virt::{RecursivePagingSpace, VirtSpace}, LinearSpace};
 
 mod entry;
 mod table;
@@ -36,10 +36,10 @@ pub trait MemoryManager {
     /// - `page_size` should be supported by the `MemoryManager`
     unsafe fn map<V: VirtSpace, const N: usize>(
         &self, 
-        vpage: Page<V>, 
-        ppage: Page<LinearSpace>, 
+        vpage: PageAddr<V>, 
+        ppage: PageAddr<LinearSpace>, 
         flags: [Flag; N],
-        allocator: &impl Pager<LinearSpace>,
+        allocator: &impl PageManager<LinearSpace>,
     ) -> Option<()>;
 
     /// Removes mapping at `vaddr`.
@@ -150,10 +150,10 @@ impl MemoryManager for X86_64MemoryManager {
 
     unsafe fn map<V: VirtSpace, const N: usize>(
         &self, 
-        vpage: Page<V>, 
-        ppage: Page<LinearSpace>, 
+        vpage: PageAddr<V>, 
+        ppage: PageAddr<LinearSpace>, 
         flags: [Flag; N],
-        allocator: &impl Pager<LinearSpace>,
+        allocator: &impl PageManager<LinearSpace>,
     ) -> Option<()> {
         debug_assert!(vpage.size() == ppage.size());
 
@@ -216,7 +216,7 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
             .map(|_| unsafe { self.down_unchecked() })
     }
 
-    fn down(&mut self, alloc: &impl Pager<LinearSpace>) -> &mut EntryRef<'a> {
+    fn down(&mut self, alloc: &impl PageManager<LinearSpace>) -> &mut EntryRef<'a> {
         if self.cur_entry.get_level().next_level().is_none() {
             return self.cur();
         }

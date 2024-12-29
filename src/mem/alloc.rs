@@ -63,6 +63,37 @@
 //         Ok(NonNull::slice_from_raw_parts(res_ptr, new_allocate_size))
 //     }
 // }
+
+use core::{alloc::{AllocError, Allocator, Layout}, ptr::NonNull};
+
+use super::{memblock::BootMemoryManager, paging::X86_64MemoryManager, virt::{BumpMemoryManager, VAllocSpace}};
+
+pub(super) struct BootAllocator(&'static spin::Mutex<BootAllocatorInner>);
+
+struct BootAllocatorInner {
+    pmm: &'static BootMemoryManager,
+    vmm: &'static BumpMemoryManager<VAllocSpace>,
+    mmu: &'static X86_64MemoryManager,
+}
+
+unsafe impl Allocator for BootAllocator {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+
+
+        let inner = self.0.lock();
+
+        let paddr = inner.pmm.allocate(layout).ok_or(AllocError)?;
+        let vaddr = inner.vmm.allocate(layout).ok_or(AllocError)?;
+
+
+        todo!()
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        todo!()
+    }
+}
+
 // struct BootAllocatorInner {
 //     cur_page: PPage,
 //     cur_offset: usize

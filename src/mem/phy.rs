@@ -1,5 +1,6 @@
-use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::PhantomPinned, mem, ops::{Add, DerefMut, Range}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
+use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::{PhantomData, PhantomPinned}, mem, ops::{Add, DerefMut, Range}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
 
+use alloc::vec::Vec;
 use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
 use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
@@ -7,9 +8,7 @@ use spin::Mutex;
 
 use crate::{boot, common::TiB, mem::kernel_end_lma};
 
-use super::{addr::{Addr, AddrRange as _, AddrSpace,}, kernel_start_lma, memblock::BootMemoryManager, p2v, page::{Page, PageBitmap, PageSize, Pager}};
-
-pub(super) static BIT_ALLOCATOR: spin::Mutex<Option<BitmapPager>> = spin::Mutex::new(None);
+use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, kernel_start_lma, memblock::BootMemoryManager, p2v};
 
 pub(super) fn init(mbi_ptr: usize) {
     todo!()
@@ -78,105 +77,66 @@ fn initial_memory_range(boot_info: &BootInformation) -> Range<PAddr> {
     }
 }
 
-type PPageBitmap = PageBitmap<{BitmapPager::PAGE_SIZE.usize()}, LinearSpace>;
 
-/// Page allocator backed by a bitmap over the managed pages.
-/// 
-/// Note that this allocator only supports the page size `Self::PAGE SIZE`, 
-/// and will panic when called with any other page sizes.
-pub(super) struct BitmapPager {
-    bitmap: spin::Mutex<&'static mut PPageBitmap>
+struct PhysicalPage {
+    next_idx: usize,
+    prev_idx: usize,
+    flag: u8,
 }
-impl BitmapPager {
-    const PAGE_SIZE: PageSize = PageSize::Small;
 
-    fn new(boot_info: &BootInformation) -> Self {
-        let init_mem_pages = initial_memory_range(boot_info)
-            .contained_pages(Self::PAGE_SIZE);
+struct PhysicalPageManager {
+    pages: &'static [PhysicalPage],
+}
+impl PhysicalPageManager {
+    fn new(boot_alloc: &BootMemoryManager, range: PageRange<LinearSpace>) -> Self {
         
-        let bitmap_size = PPageBitmap::bytes_required(
-            init_mem_pages.len()
-        );
-
-        let bitmap_pages = initial_free_memory_areas(boot_info)
-            .map(|free_area| free_area.contained_pages(Self::PAGE_SIZE))
-            .find(|free_pages| {
-                free_pages.len() >= bitmap_size
-            });
-        let Some(bitmap_pages) = bitmap_pages else {
-            panic!("System should have enough memory to hold a PageBitmap");
-        };
-
-        let bitmap_addr = p2v(bitmap_pages.start());
-        let bitmap_ref = unsafe { 
-            PageBitmap::init(
-                bitmap_addr.into_ptr(), 
-                init_mem_pages.start(), 
-                init_mem_pages.len()
-            ) 
-        };
-        unsafe { 
-            bitmap_ref.set_unchecked(
-                bitmap_pages.start(), 
-                bitmap_pages.len(), 
-                true
-            ) 
-        };
-
-        Self {bitmap: spin::Mutex::new(bitmap_ref)}
     }
+
 }
-impl Pager<LinearSpace> for BitmapPager {
-    fn allocate_pages(&self, size: usize, page_size: PageSize) -> Option<Page<LinearSpace>> {
-        assert!(page_size == Self::PAGE_SIZE);
-        let page_byte_size = page_size.usize();
 
-        let page_cnt = size.div_ceil(page_byte_size);
-        let base = self.bitmap.lock().find_unoccupied(page_cnt)?;
-        unsafe { self.bitmap.lock().set_unchecked(base, page_cnt, true) };
 
-        Some(Page::new(base, page_size))
-    }
-    
-    fn allocate_pages_at(
-        &self, 
-        cnt: usize, 
-        page_size: PageSize, 
-        at: Page<LinearSpace>
-    ) -> Option<Page<LinearSpace>> {
+impl PageManager<LinearSpace> for PhysicalPageManager {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageAddr<LinearSpace>> {
+        assert!(cnt == 1, "StackPageManager supports only one page");
         todo!()
     }
 
-    unsafe fn deallocate_pages(&self, page: Page<LinearSpace>, cnt: usize) {
-        let size = cnt * Self::PAGE_SIZE.usize();
-        self.bitmap.lock().set(page.start(), size, false);
+    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PageAddr<LinearSpace>) -> Option<PageAddr<LinearSpace>> {
+        assert!(cnt == 1, "StackPageManager supports only one page");
+        todo!()
+    }
+
+    unsafe fn deallocate_pages(&self, page: PageAddr<LinearSpace>, cnt: usize) {
+        assert!(cnt == 1, "StackPageManager supports only one page");
+        todo!()
     }
 }
 
-impl Pager<LinearSpace> for BootMemoryManager {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<Page<LinearSpace>> {
+
+impl PageManager<LinearSpace> for BootMemoryManager {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageAddr<LinearSpace>> {
         let layout = Layout::from_size_align(
             cnt * page_size.usize(), 
             page_size.alignment()
         ).expect("page_size should convert to a valid layout");
-        self.allocate(layout).map(|addr| Page::new(addr, page_size))
+        self.allocate(layout).map(|addr| PageAddr::new(addr, page_size))
     }
 
     fn allocate_pages_at(
         &self, 
         cnt: usize, 
         page_size: PageSize, 
-        at: Page<LinearSpace>
-    ) -> Option<Page<LinearSpace>> {
+        at: PageAddr<LinearSpace>
+    ) -> Option<PageAddr<LinearSpace>> {
         let layout = Layout::from_size_align(
             cnt * page_size.usize(), 
             page_size.alignment()
         ).expect("page_size should convert to a valid layout");
         self.allocate_at(layout, at.start().usize())
-            .map(|addr| Page::new(addr, page_size))
+            .map(|addr| PageAddr::new(addr, page_size))
     }
 
-    unsafe fn deallocate_pages(&self, page: Page<LinearSpace>, _cnt: usize) {
+    unsafe fn deallocate_pages(&self, page: PageAddr<LinearSpace>, _cnt: usize) {
         unsafe {self.deallocate(page.start())};
     }
 }

@@ -3,7 +3,7 @@ use core::ops::{Add, BitAnd, BitOr, Range, Sub};
 use addr::Addr;
 use memblock::BootMemoryManager;
 use multiboot2::BootInformation;
-use page::{Page, PageSize, Pager};
+use addr::{PageAddr, PageSize, PageManager};
 use paging::{Flag, MemoryManager, X86_64MemoryManager};
 use virt::{KernelSpace, PhysicalRemapSpace, VAllocSpace, VirtSpace};
 
@@ -16,7 +16,6 @@ mod alloc;
 mod paging;
 pub mod memblock;
 pub mod addr;
-pub mod page;
 
 pub use phy::LinearSpace;
 
