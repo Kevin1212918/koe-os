@@ -8,7 +8,7 @@ use spin::Mutex;
 
 use crate::{boot, common::TiB, mem::kernel_end_lma};
 
-use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, kernel_start_lma, memblock::BootMemoryManager, p2v};
+use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, kernel_start_lma, memblock::BootMemoryManager, p2v, paging::{MemoryManager, X86_64MemoryManager}, virt::{BumpMemoryManager, VAllocSpace}};
 
 pub(super) fn init(mbi_ptr: usize) {
     todo!()
@@ -78,18 +78,26 @@ fn initial_memory_range(boot_info: &BootInformation) -> Range<PAddr> {
 }
 
 
+
+type PhyId = usize;
 struct PhysicalPage {
-    next_idx: usize,
-    prev_idx: usize,
+    next_idx: PhyId,
+    prev_idx: PhyId,
     flag: u8,
 }
 
 struct PhysicalPageManager {
-    pages: &'static [PhysicalPage],
+    pages: &'static mut [PhysicalPage],
 }
 impl PhysicalPageManager {
-    fn new(boot_alloc: &BootMemoryManager, range: PageRange<LinearSpace>) -> Self {
-
+    fn new(
+        boot_mm: &BootMemoryManager, 
+        vmm: &BumpMemoryManager<VAllocSpace>, 
+        mmu: &X86_64MemoryManager,
+        range: PageRange<LinearSpace>
+    ) -> Self {
+        boot_mm.allocate_pages(cnt, page_size);
+        vmm.allocate_pages(cnt, page_size)
     }
 }
 

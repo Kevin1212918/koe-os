@@ -61,7 +61,7 @@ impl Memblocks {
 
         let Some(pivot) = self.data.binary_search(&block).err() else {
             // Inserting overlapping block
-            return false;
+            return false; 
         };
 
         // Check if block overlap or merge with prev or next block
