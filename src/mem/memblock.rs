@@ -231,6 +231,7 @@ impl BootMemoryManager {
 
         Some(PAddr::new(ret))
     }
+
     pub fn allocate_at(&self, layout: Layout, at: usize) -> Option<PAddr> {
         let mut inner_ref = self.0.lock();
 

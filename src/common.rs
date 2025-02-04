@@ -1,3 +1,5 @@
+use core::{pin::Pin, ptr::NonNull, sync::atomic::AtomicPtr};
+
 #[allow(non_upper_case_globals)]
 pub const KiB: usize = 1 << 10;
 #[allow(non_upper_case_globals)]
@@ -11,3 +13,6 @@ pub fn hlt() -> ! {
     unsafe { core::arch::asm!("hlt") };
     unreachable!()
 }
+
+pub mod ll;
+

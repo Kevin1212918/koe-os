@@ -1,14 +1,12 @@
 use core::{alloc::Layout, cell::{OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::{PhantomData, PhantomPinned}, mem, ops::{Add, DerefMut, Range}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
 
-use alloc::vec::Vec;
-use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
+use arrayvec::ArrayVec;
 use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
-use spin::Mutex;
 
-use crate::{boot, common::TiB, mem::kernel_end_lma};
+use crate::{boot, common::{ll, TiB}, mem::kernel_end_lma};
 
-use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, kernel_start_lma, memblock::BootMemoryManager, p2v, paging::{MemoryManager, X86_64MemoryManager}, virt::{BumpMemoryManager, VAllocSpace}};
+use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, alloc::allocate_pages, kernel_start_lma, p2v, paging::{MemoryManager, X86_64MemoryManager}, virt::{BumpMemoryManager, VAllocSpace}};
 
 pub(super) fn init(mbi_ptr: usize) {
     todo!()
@@ -79,71 +77,172 @@ fn initial_memory_range(boot_info: &BootInformation) -> Range<PAddr> {
 
 
 
-type PhyId = usize;
-struct PhysicalPage {
-    next_idx: PhyId,
-    prev_idx: PhyId,
+struct Page {
+    link: ll::Link<Self>,
     flag: u8,
 }
 
 struct PhysicalPageManager {
-    pages: &'static mut [PhysicalPage],
+    pages: NonNull<[Page]>,
+}
+impl ll::LinkNode for Page {
+    fn link(&self) -> &ll::Link<Self> { &self.link }
 }
 impl PhysicalPageManager {
+    const BUDDY_MAX_DEPTH: u8;
+
     fn new(
-        boot_mm: &BootMemoryManager, 
-        vmm: &BumpMemoryManager<VAllocSpace>, 
         mmu: &X86_64MemoryManager,
-        range: PageRange<LinearSpace>
+        managed_range: PageRange<LinearSpace>,
+        free_ranges: impl Iterator<Item = PageRange<LinearSpace>>,
     ) -> Self {
-        boot_mm.allocate_pages(cnt, page_size);
-        vmm.allocate_pages(cnt, page_size)
+        let buf_page_size = PageSize::Small;
+        let buf_page_cnt = ( range.len() * size_of::<Page>() ).div_ceil(buf_page_size.usize());
+
+        todo!()
     }
 }
-
 
 impl PageManager<LinearSpace> for PhysicalPageManager {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageAddr<LinearSpace>> {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<LinearSpace>> {
         assert!(cnt == 1, "StackPageManager supports only one page");
         todo!()
     }
 
-    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PageAddr<LinearSpace>) -> Option<PageAddr<LinearSpace>> {
-        assert!(cnt == 1, "StackPageManager supports only one page");
-        todo!()
-    }
-
-    unsafe fn deallocate_pages(&self, page: PageAddr<LinearSpace>, cnt: usize) {
-        assert!(cnt == 1, "StackPageManager supports only one page");
+    unsafe fn deallocate_pages(&self, pages: PageRange<LinearSpace>) {
+        assert!(pages.len() == 1, "StackPageManager supports only one page");
         todo!()
     }
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+/// Static physical memory manager. This is used to initialize and is replaced 
+/// by [PhysicalPageManager]
+struct BootMemoryRecord {
+    reserved: ArrayVec<PageRange<LinearSpace>, { Self::MAX_FRAGMENT }>,
+    free: ArrayVec<PageRange<LinearSpace>, { Self::MAX_FRAGMENT }>,
+    managed_range: PageRange<LinearSpace>,
+}
+impl BootMemoryRecord {
+    const MAX_FRAGMENT: usize = 128;
+    const PAGE_SIZE: PageSize = PageSize::Small;
+
+    /// Creates a new [`BootMemoryManager`].
+    /// 
+    /// The argument `page_ranges` specifies consists of tuples 
+    /// `(is_free, range)`, where `is_free` specifies if the range is 
+    /// initially free. 
+    fn new<'a>(page_ranges: impl Iterator<Item = (bool, &'a PageRange<LinearSpace>)>) -> Self {
+        let mut reserved = ArrayVec::new();
+        let mut free = ArrayVec::new();
+
+        let mut mge_min: Option<Addr<LinearSpace>> = None;
+        let mut mge_max: Option<Addr<LinearSpace>> = None;
+
+        for (is_free, range) in page_ranges {
+            mge_min = mge_min
+                .map(|x| x.min(range.start()))
+                .or(Some(range.start()));
+
+            mge_max = mge_max
+                .map(|x| x.max(range.end()))
+                .or(Some(range.end()));
+
+            if is_free {
+                free.push(range.clone());
+            } else {
+                reserved.push(range.clone());
+            }
+        }
+
+        let (Some(mge_min), Some(mge_max)) = (mge_min, mge_max) else {
+            panic!("should not invoke BootMemoryManager::new with no memory");
+        };
+
+        free.sort_unstable_by_key(|x|x.start());
+        reserved.sort_unstable_by_key(|x|x.start());
+
+        let managed_range = (mge_min .. mge_max).contained_pages(Self::PAGE_SIZE);
+        Self { reserved, free, managed_range } 
+    }
+}
+
+struct BootMemoryManager(spin::Mutex<BootMemoryRecord>);
+impl BootMemoryManager {
+    fn new<'a>(page_ranges: impl Iterator<Item = (bool, &'a PageRange<LinearSpace>)>) -> Self {
+        Self (spin::Mutex::new(BootMemoryRecord::new(page_ranges)))
+    }
+}
+
 impl PageManager<LinearSpace> for BootMemoryManager {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageAddr<LinearSpace>> {
-        let layout = Layout::from_size_align(
-            cnt * page_size.usize(), 
-            page_size.alignment()
-        ).expect("page_size should convert to a valid layout");
-        self.allocate(layout).map(|addr| PageAddr::new(addr, page_size))
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<LinearSpace>> {
+        let mut record = self.0.lock();
+
+        for i in 0 .. record.free.len() {
+            let block = unsafe { record.free.get_unchecked_mut(i) };
+            let contained_pages = block.range().contained_pages(page_size);
+            if contained_pages.len() < cnt { continue; }
+
+            let start = PageAddr::new(contained_pages.start(), page_size);
+            let target = PageRange::new(start, cnt);
+
+            let residuals = block.range().range_sub(target.range())
+                .map(|x| PageRange::try_from_range(x, BootMemoryRecord::PAGE_SIZE)
+                .expect("residual ranges should be aligned to the smallest page size"));
+
+            match (residuals[0].is_empty(), residuals[1].is_empty()) {
+                (false, false) => { record.free.remove(i); },
+                (true, false) => { record.free[i] = residuals[0]; },
+                (false, true) => { record.free[i] = residuals[1]; },
+                (true, true) => { 
+                    record.free[i] = residuals[1];
+                    record.free.insert(i, residuals[0]); 
+                },
+            }
+
+            return Some(target);
+        }
+
+        return None;
     }
 
-    fn allocate_pages_at(
-        &self, 
-        cnt: usize, 
-        page_size: PageSize, 
-        at: PageAddr<LinearSpace>
-    ) -> Option<PageAddr<LinearSpace>> {
-        let layout = Layout::from_size_align(
-            cnt * page_size.usize(), 
-            page_size.alignment()
-        ).expect("page_size should convert to a valid layout");
-        self.allocate_at(layout, at.start().usize())
-            .map(|addr| PageAddr::new(addr, page_size))
-    }
+    unsafe fn deallocate_pages(&self, pages: PageRange<LinearSpace>) {
+        let mut record = self.0.lock();
+        let pages = PageRange::try_from_range(pages.range(), BootMemoryRecord::PAGE_SIZE)
+            .expect("all page ranges should be aligned to the smallest page size");
 
-    unsafe fn deallocate_pages(&self, page: PageAddr<LinearSpace>, _cnt: usize) {
-        unsafe {self.deallocate(page.start())};
+        let idx = record.free.binary_search_by_key(&pages.start(), |x|x.start())
+            .expect_err("cannot deallocate a free'd page");
+
+        let merge_front = (idx > 0) && record.free[idx-1].end() == pages.start();
+        let merge_back = (idx < record.free.len()) && record.free[idx].start() == pages.end();
+
+        match (merge_front, merge_back) {
+            (false, false) => {
+                record.free.insert(idx, pages);
+            },
+            (false, true) => {
+                record.free[idx].len += pages.len();
+            },
+            (true, false) => {
+                record.free[idx-1].len += pages.len();
+            },
+            (true, true) => {
+                record.free[idx-1].len += pages.len();
+                record.free[idx-1].len += record.free[idx].len();
+                record.free.remove(idx);
+            },
+        };
     }
 }

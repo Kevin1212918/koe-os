@@ -66,48 +66,35 @@
 
 use core::{alloc::{AllocError, Allocator, Layout}, ptr::NonNull};
 
-use crate::mem::paging::MemoryManager;
+use super::{addr::{PageManager, PageSize}, paging::{Flag, MemoryManager}, virt::VirtSpace, LinearSpace};
 
-use super::{memblock::BootMemoryManager, paging::X86_64MemoryManager, virt::{BumpMemoryManager, VAllocSpace}};
+pub fn allocate_pages<V: VirtSpace> (
+    mmu: &impl MemoryManager,
+    vmm: &impl PageManager<V>,
+    pmm: &impl PageManager<LinearSpace>, 
 
-pub(super) struct BootAllocator(&'static spin::Mutex<BootAllocatorInner>);
+    cnt: usize, 
+    page_size: PageSize,
 
-struct BootAllocatorInner {
-    pmm: &'static BootMemoryManager,
-    vmm: &'static BumpMemoryManager<VAllocSpace>,
-    mmu: &'static X86_64MemoryManager,
-}
+) -> Result<NonNull<[u8]>, AllocError> {
+    let vbase = vmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
+    let pbase = pmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
 
-unsafe impl Allocator for BootAllocator {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+    let ptr = NonNull::new(vbase.start().into_ptr())
+        .expect("successfull virtual page allocation should not return null address");
 
+    debug_assert!(vbase.len() == cnt);
+    debug_assert!(pbase.len() == cnt);
 
-        let inner = self.0.lock();
+    let flags = [Flag::Present, Flag::ReadWrite];
 
-        let paddr = inner.pmm.allocate(layout).ok_or(AllocError)?;
-        let vaddr = inner.vmm.allocate(layout).ok_or(AllocError)?;
-
-
-
-        todo!()
+    for (vpage, ppage) in Iterator::zip(vbase.into_iter(), pbase.into_iter()) {
+        unsafe {
+            mmu.map(vpage, ppage, flags, pmm)
+                .expect("TODO: cleanup");
+        }
     }
 
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        todo!()
-    }
+    Ok( NonNull::slice_from_raw_parts(ptr, page_size.usize()) )
 }
 
-// struct BootAllocatorInner {
-//     cur_page: PPage,
-//     cur_offset: usize
-// }
-
-// unsafe impl Allocator for BootAllocator {
-//     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-//         self.allocate(layout)
-//     }
-
-//     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
-//         debug_assert!(false, "BootAllocator cannot deallocate memory");
-//     }
-// }

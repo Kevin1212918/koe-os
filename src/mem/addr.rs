@@ -53,6 +53,48 @@ impl<S: AddrSpace> Addr<S> {
     pub fn addr_sub(self, x: Self) -> isize {
         self.value as isize - x.value as isize
     }
+
+    /// Returns an aligned address by rounding above. 
+    /// 
+    /// If the resulting address is higher than the address space, return the 
+    /// highest aligned address within the address space.
+    /// 
+    /// # Panics
+    /// Panics if no aligned address is within the address space, or alignment
+    /// is 0.
+    pub fn saturating_align_ceil(mut self, alignment: usize) -> Self {
+        let start = S::RANGE.start;
+        let end = S::RANGE.start;
+        let res = self.usize()
+            .checked_next_multiple_of(alignment)
+            .filter(|&x| x < end)
+            .or(Some(end - end % alignment))
+            .filter(|&x| x >= start);
+
+        self.value = res.expect("no aligned address within address space");
+        self
+    }
+
+    /// Returns an aligned address by rounding below. 
+    /// 
+    /// If the resulting address is lower than the address space, return the 
+    /// lowest aligned address within the address space.
+    /// 
+    /// # Panics
+    /// Panics if no aligned address is within the address space, or alignment 
+    /// is 0.
+    pub fn saturating_align_floor(mut self, alignment: usize) -> Self {
+        let start = S::RANGE.start;
+        let end = S::RANGE.start;
+        let val = self.usize();
+        let res = Some(val - val % alignment)
+            .filter(|&x| x >= start)
+            .or(start.checked_next_multiple_of(alignment))
+            .filter(|&x| x < end);
+
+        self.value = res.expect("no aligned address within address space");
+        self
+    }
     pub const fn is_aligned_to(self, alignment: usize) -> bool {
         self.value % alignment == 0
     }
@@ -74,6 +116,9 @@ impl<S: VirtSpace> Addr<S> {
 
 impl<S: AddrSpace> AddrRange for Range<Addr<S>> {
     type Space = S; 
+    fn start(&self) -> Addr<Self::Space> { self.start }
+    fn end(&self) -> Addr<Self::Space> { self.end }
+
     fn range_sub(&self, rhs: Self) -> [Self; 2] {
         if self.is_empty() && rhs.is_empty() {
             let empty = self.start .. self.start;
@@ -90,82 +135,156 @@ impl<S: AddrSpace> AddrRange for Range<Addr<S>> {
             self.end.addr_sub(self.start) as usize
         }
     }
-    fn contained_pages(&self, page_size: PageSize) -> PageRange<S> {
-        let start: usize = self.start.usize();
-        let Some(start) = start.checked_next_multiple_of(page_size.into()) else {
-            return PageRange::empty();
-        };
-        let start_page = PageAddr::new(Addr::new(start), page_size);
-        
-        let end: usize = self.end.usize();
-        let end = end - (end % page_size.usize());
-        let end_page = PageAddr::new(Addr::new(end), page_size);
 
-        PageRange::new(start_page, end_page)
+    /// Returns the range of **fully** contained pages.
+    fn contained_pages(&self, page_size: PageSize) -> PageRange<S> {
+        if self.size() < page_size.usize() {
+            return PageRange::empty(page_size);
+        }
+
+        let start = self.start.saturating_align_ceil(page_size.usize()); 
+        let start = PageAddr::new(start, page_size);
+
+        let end = self.end.saturating_align_floor(page_size.usize());
+        let end = PageAddr::new(end, page_size);
+
+        if end.start() <= start.start() {
+            return PageRange::empty(page_size);
+        }
+
+        let size: Result<usize, _> = end.start()
+            .addr_sub(start.start())
+            .try_into();
+
+        match size {
+            Ok(size) => PageRange::new(start, size / page_size.usize()),
+            Err(_) => PageRange::empty(page_size),
+        }
+    }
+
+    fn overlapped_pages(&self, page_size: PageSize) -> PageRange<Self::Space> {
+        if (S::RANGE.end - S::RANGE.start) < page_size.usize() {
+            return PageRange::empty(page_size);
+        }
+
+        let start = self.start.saturating_align_floor(page_size.usize()); 
+        let start = PageAddr::new(start, page_size);
+
+        let end = self.end.saturating_align_ceil(page_size.usize());
+        let end = PageAddr::new(end, page_size);
+
+        if end.start() <= start.start() {
+            return PageRange::empty(page_size);
+        }
+
+        let size: Result<usize, _> = end.start()
+            .addr_sub(start.start())
+            .try_into();
+
+        match size {
+            Ok(size) => PageRange::new(start, size / page_size.usize()),
+            Err(_) => PageRange::empty(page_size),
+        }
     }
     
 }
 pub trait AddrRange: Sized {
     type Space: AddrSpace;
+
+    fn start(&self) -> Addr<Self::Space>;
+    fn end(&self) -> Addr<Self::Space>;
     /// Returns the set difference `self` - `rhs`. 
-    /// 
+    ///
     /// The set difference between two contiguous ranges result in a maximum of 
     /// two contiguous ranges, thus two ranges are returned.
     fn range_sub(&self, rhs: Self) -> [Self; 2];
     fn size(&self) -> usize;
     fn contained_pages(&self, page_size: PageSize) -> PageRange<Self::Space>;
+    fn overlapped_pages(&self, page_size: PageSize) -> PageRange<Self::Space>;
 }
 
 /// A page consists a page aligned address and a page size
 #[derive(Debug, Clone, Copy)]
 pub struct PageAddr<S: AddrSpace>{
     base: Addr<S>,
-    size: PageSize,
+    page_size: PageSize,
 }
 impl<S: AddrSpace> PageAddr<S> {
     /// Creates a new page descriptor for the page at `base` of `size`
     /// 
     /// # Panics
     /// panics if `base` is not page aligned
-    pub fn new(base: Addr<S>, size: PageSize) -> Self {
-        let alignment: usize = size.into();
+    pub fn new(base: Addr<S>, page_size: PageSize) -> Self {
+        let alignment: usize = page_size.into();
         assert!(base.usize() % alignment == 0);
-        Self {base, size}
+        Self {base, page_size}
     }
     pub fn start(&self) -> Addr<S> { self.base }
-    pub fn end(&self) -> Addr<S> { self.base.byte_add(self.size.usize()) }
-    pub fn size(&self) -> PageSize { self.size } 
+    pub fn end(&self) -> Addr<S> { self.base.byte_add(self.page_size.usize()) }
+    pub fn size(&self) -> PageSize { self.page_size } 
     pub fn range(&self) -> Range<Addr<S>> { self.start() .. self.end() }
 }
 
 /// A contiguous range of pages
+#[derive(Debug, Clone, Copy)]
 pub struct PageRange<S: AddrSpace> {
-    start: Addr<S>,
-    end: Addr<S>,
-    size: PageSize,
+    start: PageAddr<S>,
+    pub len: usize,
 }
 impl<S: AddrSpace> PageRange<S> {
     /// Creates a contiguous range of pages between `start_page` and 
     /// `end_page`, half way inclusive.
-    pub fn new(start_page: PageAddr<S>, end_page: PageAddr<S>) -> Self {
-        let size = start_page.size;
-        let start = start_page.base;
-        let end = end_page.base;
+    pub fn new(start_page: PageAddr<S>, len: usize) -> Self {
+        let start = start_page;
+        Self {start, len}
+    }
 
-        Self {start, end, size}
-    }
-    pub fn start(&self) -> Addr<S> { self.start }
-    pub fn page_size(&self) -> PageSize { self.size }
-    pub fn len(&self) -> usize {
-        (self.end.usize().saturating_sub(self.start.usize())) / self.size.usize()
-    }
-    pub fn empty() -> Self {
-        let size = PageSize::Small;
-        let start = Addr::new(0);
-        let end = Addr::new(0);
+    /// Creates a page range from addr range.
+    /// 
+    /// Returns None if `range` is not an aligned page range.
+    pub fn try_from_range(range: impl AddrRange<Space = S>, page_size: PageSize) -> Option<Self> {
+        let start = range.start();
+        let end = range.end();
 
-        Self { start, end, size }
+        if !start.is_aligned_to(page_size.usize()) ||
+           !end.is_aligned_to(page_size.usize()) {
+            return None;
+        }
+
+        let diff: Result<usize, _> = end.addr_sub(start).try_into();
+        let Ok(diff) = diff else {
+            return Some(Self::empty(page_size));
+        };
+        
+        let start = PageAddr::new(start, page_size);
+        (diff % page_size.usize() == 0)
+            .then_some(diff / page_size.usize())
+            .map(|len| Self { start, len } )
     }
+    
+    /// Returns start of the `PageRange`
+    pub fn start(&self) -> Addr<S> { self.start.start() }
+
+    /// Returns end of the `PageRange`
+    pub fn end(&self) -> Addr<S> { 
+        self.start.start().byte_add(self.size())
+    }
+    pub fn range(&self) -> Range<Addr<S>> { self.start() .. self.end() }
+
+    /// Returns page size of `PageRange`
+    pub fn page_size(&self) -> PageSize { self.start.size() }
+
+    /// Returns number of pages in the `PageRange`
+    pub fn len(&self) -> usize { self.len }
+
+    /// Returns size in bytes of the `PageRange`
+    pub fn size(&self) -> usize { self.len * self.start.size().usize() }
+    pub fn empty(page_size: PageSize) -> Self {
+        let start = PageAddr::new(Addr::new(0), page_size);
+
+        Self { start, len: 0 }
+    }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 }
 impl<S: AddrSpace> IntoIterator for PageRange<S> {
     type Item = PageAddr<S>;
@@ -176,14 +295,14 @@ impl<S: AddrSpace> IntoIterator for PageRange<S> {
                     >;
 
     fn into_iter(self) -> Self::IntoIter {
-        let start: usize = self.start.usize();
-        let end: usize = self.end.usize();
-        let step = self.size.usize();
+        let start: usize = self.start().usize();
+        let end: usize = self.end().usize();
+        let step = self.page_size().usize();
 
         (start .. end)
             .step_by(step)
             .map(move |base| 
-                PageAddr::new(Addr::new(base), self.size)
+                PageAddr::new(Addr::new(base), self.page_size())
             )
     }
 }
@@ -193,18 +312,18 @@ pub trait PageManager<S: AddrSpace> {
     /// 
     /// It is guarenteed that an allocated page will not be allocated again for
     /// the duration of the program.
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageAddr<S>>;
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
 
-    /// Allocates contiguous `cnt` of `page_size`-sized pages which starts 
-    /// at `at`. If the `cnt` pages starting at `at` is not available to 
-    /// allocate, this tries to allocate some other contiguous pages.
-    fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PageAddr<S>) -> Option<PageAddr<S>>;
+    // /// Allocates contiguous `cnt` of `page_size`-sized pages which starts 
+    // /// at `at`. If the `cnt` pages starting at `at` is not available to 
+    // /// allocate, this tries to allocate some other contiguous pages.
+    // fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at: PageAddr<S>) -> Option<PageRange<S>>;
 
     /// Deallocate `page`
     /// 
     /// # Safety
     /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate_pages(&self, page: PageAddr<S>, cnt: usize);
+    unsafe fn deallocate_pages(&self, pages: PageRange<S>);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
