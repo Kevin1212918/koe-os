@@ -66,7 +66,7 @@
 //     }
 // }
 
-use core::alloc::{AllocError, Allocator, Layout};
+use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::NonNull;
 
 use super::addr::{PageManager, PageSize};
@@ -103,4 +103,17 @@ pub fn allocate_pages<V: VirtSpace>(
         ptr,
         page_size.usize(),
     ))
+}
+
+#[global_allocator]
+static DUMMY_ALLOC: DummyAllocator = DummyAllocator;
+struct DummyAllocator;
+unsafe impl GlobalAlloc for DummyAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unimplemented!()
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unimplemented!()
+    }
 }
