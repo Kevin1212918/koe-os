@@ -5,7 +5,7 @@ use memblock::BootMemoryManager;
 use multiboot2::BootInformation;
 use addr::{PageAddr, PageSize, PageManager};
 use paging::{Flag, MemoryManager, X86_64MemoryManager};
-use virt::{KernelSpace, PhysicalRemapSpace, VAllocSpace, VirtSpace};
+use virt::{KernelSpace, PhysicalRemapSpace, VirtSpace};
 
 use crate::{common::hlt, drivers::vga::VGA_BUFFER};
 use core::fmt::Write as _;

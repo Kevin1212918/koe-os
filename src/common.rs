@@ -15,4 +15,5 @@ pub fn hlt() -> ! {
 }
 
 pub mod ll;
+pub mod array_forest;
 
