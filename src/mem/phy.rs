@@ -1,18 +1,32 @@
-use core::{alloc::Layout, cell::{Cell, OnceCell, SyncUnsafeCell}, hash::BuildHasherDefault, iter, marker::{PhantomData, PhantomPinned}, mem::{self, offset_of, MaybeUninit}, ops::{Add, DerefMut, Range}, pin::Pin, ptr::{self, slice_from_raw_parts_mut, NonNull}, slice, usize};
+use alloc::alloc::{AllocError, Allocator};
+use alloc::collections::binary_heap::BinaryHeap;
+use alloc::vec::Vec;
+use core::alloc::Layout;
+use core::cell::{Cell, OnceCell, SyncUnsafeCell};
+use core::hash::BuildHasherDefault;
+use core::marker::{PhantomData, PhantomPinned};
+use core::mem::{self, offset_of, MaybeUninit};
+use core::ops::{Add, DerefMut, Range};
+use core::pin::Pin;
+use core::ptr::{self, slice_from_raw_parts_mut, NonNull};
+use core::{iter, slice, usize};
 
-use alloc::{alloc::{AllocError, Allocator}, collections::{binary_heap::BinaryHeap}, vec::Vec};
 use arrayvec::ArrayVec;
 use derive_more::derive::{From, Into, Sub};
 use multiboot2::{BootInformation, MemoryAreaTypeId};
 use nonmax::{NonMaxU8, NonMaxUsize};
 
-use crate::{boot, common::{array_forest::{self, ArrayForest, Cursor}, ll::{self, Link, ListHead, ListNode}, TiB}, mem::kernel_end_lma};
+use super::addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use super::alloc::allocate_pages;
+use super::paging::{MemoryManager, X86_64MemoryManager};
+use super::{kernel_start_lma, p2v};
+use crate::boot;
+use crate::common::array_forest::{self, ArrayForest, Cursor};
+use crate::common::ll::{self, Link, ListHead, ListNode};
+use crate::common::TiB;
+use crate::mem::kernel_end_lma;
 
-use super::{addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize,}, alloc::allocate_pages, kernel_start_lma, p2v, paging::{MemoryManager, X86_64MemoryManager}};
-
-pub(super) fn init(mbi_ptr: usize) {
-    todo!()
-}
+pub(super) fn init(mbi_ptr: usize) { todo!() }
 
 pub trait PhySpace: AddrSpace {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -22,59 +36,62 @@ impl AddrSpace for LinearSpace {
     const RANGE: Range<usize> = {
         let start = 0;
         let end = 64 * TiB;
-        start .. end
+        start..end
     };
 }
 
 type PAddr = Addr<LinearSpace>;
 
 /// Find the initial free memory areas.
-/// 
+///
 /// Note this only considers the memory usage before `kmain` is called.
 fn initial_free_memory_areas<'boot>(
-    boot_info: &'boot BootInformation
-) -> impl Iterator<Item = Range<PAddr>> + 'boot{
+    boot_info: &'boot BootInformation,
+) -> impl Iterator<Item = Range<PAddr>> + 'boot {
     let mbi_range = unsafe {
         let start = PAddr::new(boot_info.start_address());
         let end = PAddr::new(boot_info.end_address());
-        start .. end
+        start..end
     };
-    let memory_areas = boot_info.memory_map_tag()
-        .expect("BootInformation should include memory map").memory_areas();
+    let memory_areas = boot_info
+        .memory_map_tag()
+        .expect("BootInformation should include memory map")
+        .memory_areas();
 
     let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
-    let kernel_area = kernel_start_lma() .. kernel_end_lma();
+    let kernel_area = kernel_start_lma()..kernel_end_lma();
     memory_areas
         .iter()
-        .filter(move |area| 
-            area.typ() == available
-        )
+        .filter(move |area| area.typ() == available)
         .map(|area| unsafe {
             let start = PAddr::new(area.start_address() as usize);
             let end = PAddr::new(area.end_address() as usize);
-            start .. end
+            start..end
         })
         .flat_map(move |range| range.range_sub(kernel_area.clone()))
-        .filter(|x|!x.is_empty())
+        .filter(|x| !x.is_empty())
         .flat_map(move |range| range.range_sub(mbi_range.clone()))
-        .filter(|x|!x.is_empty())
+        .filter(|x| !x.is_empty())
 }
 
 /// Find the initial range of available physical memory
 fn initial_memory_range(boot_info: &BootInformation) -> Range<PAddr> {
-    let memory_areas = boot_info.memory_map_tag()
-        .expect("BootInformation should include memory map").memory_areas();
+    let memory_areas = boot_info
+        .memory_map_tag()
+        .expect("BootInformation should include memory map")
+        .memory_areas();
 
     let (mut min, mut max) = (usize::MAX, 0);
     for area in memory_areas {
         min = usize::min(area.start_address() as usize, min);
         max = usize::max(area.end_address() as usize, max);
     }
-    assert!(min < max, "BootInformation memory map should not be empty");
+    assert!(
+        min < max,
+        "BootInformation memory map should not be empty"
+    );
 
-    unsafe {
-        PAddr::new(min) .. PAddr::new(max+1)
-    }
+    unsafe { PAddr::new(min)..PAddr::new(max + 1) }
 }
 
 bitflags::bitflags! {
@@ -91,10 +108,12 @@ unsafe impl ListNode<{ Page::OFF }> for Page {}
 
 impl Page {
     const OFF: usize = offset_of!(Page, link);
+
     fn order(self: Pin<&mut Self>) -> &mut u8 {
         // SAFETY: order field is not pinned.
         &mut unsafe { self.get_unchecked_mut() }.order
     }
+
     fn flag(self: Pin<&mut Self>) -> &mut Flag {
         // SAFETY: order field is not pinned.
         &mut unsafe { self.get_unchecked_mut() }.flag
@@ -110,35 +129,44 @@ pub struct Pfn(NonMaxUsize);
 struct PhysicalMemoryManager {
     frames: &'static mut [Page],
     base: PageAddr<LinearSpace>,
+    buddy: BuddySystem,
 }
 impl PhysicalMemoryManager {
     fn page(&self, pfn: Pfn) -> Option<Pin<&Page>> {
         // SAFETY: All pages are pinned
-        self.frames.get(pfn.0.get())
+        self.frames
+            .get(pfn.0.get())
             .map(|x| unsafe { Pin::new_unchecked(x) })
     }
+
     fn page_mut(&mut self, pfn: Pfn) -> Option<Pin<&mut Page>> {
         // SAFETY: All pages are pinned
-        self.frames.get_mut(pfn.0.get())
+        self.frames
+            .get_mut(pfn.0.get())
             .map(|x| unsafe { Pin::new_unchecked(x) })
     }
+
     const fn pfn_from_raw(&self, pfn: usize) -> Option<Pfn> {
-        if pfn >= self.frames.len() { return None; }
+        if pfn >= self.frames.len() {
+            return None;
+        }
 
         // SAFETY: pfn is less than self.frames.len(), which is less than max.
-        Some(Pfn( unsafe {NonMaxUsize::new_unchecked(pfn)} ))
+        Some(Pfn(unsafe {
+            NonMaxUsize::new_unchecked(pfn)
+        }))
     }
+
     const fn pfn(&self, page: &Page) -> Pfn {
         let page_ptr = ptr::from_ref(page);
         // SAFETY: Page structs are all located within PMM.frames
         let idx: isize = unsafe { page_ptr.offset_from(self.frames_ptr()) };
         let idx: usize = idx as usize;
         // SAFETY: idx cannot be too large
-        Pfn( unsafe {NonMaxUsize::new_unchecked(idx)} )
-    } 
-    const fn frames_ptr(&self) -> *const Page {
-        &raw const self.frames[0]
+        Pfn(unsafe { NonMaxUsize::new_unchecked(idx) })
     }
+
+    const fn frames_ptr(&self) -> *const Page { &raw const self.frames[0] }
 }
 
 
@@ -150,24 +178,29 @@ impl PhysicalMemoryManager {
     ) -> Self {
         let buf_page_size = PageSize::Small;
         todo!()
-
     }
 }
 
 impl PageManager<LinearSpace> for PhysicalMemoryManager {
     fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<LinearSpace>> {
-        assert!(cnt == 1, "StackPageManager supports only one page");
+        assert!(
+            cnt == 1,
+            "StackPageManager supports only one page"
+        );
         todo!()
     }
 
     unsafe fn deallocate_pages(&self, pages: PageRange<LinearSpace>) {
-        assert!(pages.len() == 1, "StackPageManager supports only one page");
+        assert!(
+            pages.len() == 1,
+            "StackPageManager supports only one page"
+        );
         todo!()
     }
 }
 
 
-type PageList = ListHead<{Page::OFF}, Page>;
+type PageList = ListHead<{ Page::OFF }, Page>;
 
 const BUDDY_MAX_ORDER: u8 = 18;
 const BUDDY_MAX_DEPTH: u8 = BUDDY_MAX_ORDER;
@@ -179,29 +212,30 @@ struct BuddySystem {
 }
 impl BuddySystem {
     /// Create a buddy system that manages `range`.
-    /// 
+    ///
     /// # Undefined Behavior
     /// `range` should be aligned to [`BUDDY_MIN_BLOCK_SIZE`]
-    /// 
+    ///
     /// TODO: check range in bound.
-    /// 
+    ///
     /// # Panic
-    /// See [`BitForest::new`] for `buf` requirements. 
-    pub fn new(pmm: &PhysicalMemoryManager, alloc: impl Allocator) -> Result<Self, AllocError> 
-    {
+    /// See [`BitForest::new`] for `buf` requirements.
+    pub fn new(pmm: &PhysicalMemoryManager, alloc: impl Allocator) -> Result<Self, AllocError> {
         let page_cnt = pmm.frames.len();
         let dummy_page_cnt = page_cnt.next_power_of_two();
 
-        let max_order = (dummy_page_cnt.ilog2() as u8)
-            .max(BUDDY_MAX_ORDER);
+        let max_order = (dummy_page_cnt.ilog2() as u8).max(BUDDY_MAX_ORDER);
 
         let tree_depth = max_order + 1;
         let tree_cnt = page_cnt.div_ceil(1 << max_order);
         let mut map = ArrayForest::new(
-            tree_cnt, tree_depth as usize, alloc, Buddy::free(0)
+            tree_cnt,
+            tree_depth as usize,
+            alloc,
+            Buddy::free(0),
         )?;
         for d in 0..tree_depth {
-            // Initialize dummy pages as reserved. 
+            // Initialize dummy pages as reserved.
 
 
             let order = max_order - d;
@@ -218,7 +252,7 @@ impl BuddySystem {
             let dslice = map.slice_mut(d as usize);
             dslice[0..fill_cnt].fill(fill);
             dslice[fill_cnt] = partial;
-            dslice[fill_cnt+1..].fill(empty);
+            dslice[fill_cnt + 1..].fill(empty);
         }
 
         let buddy = BuddySystem { map };
@@ -226,20 +260,22 @@ impl BuddySystem {
         Ok(buddy)
     }
 
-    /// Free a reserved page. 
-    /// 
+    /// Free a reserved page.
+    ///
     /// # Undefined Behavior
     /// `pfn` should be previously reserved through this [`BuddySystem`]
     pub fn free(&mut self, pmm: &mut PhysicalMemoryManager, pfn: Pfn) {
-        let page = pmm.page(pfn)
-            .expect("pfn should be valid.");
+        let page = pmm.page(pfn).expect("pfn should be valid.");
         let depth = Self::order2depth(&self, page.order);
         let idx = Self::pfn2idx(pfn, page.order);
 
         let mut cursor = self.map.cursor_mut(depth, idx);
 
         let buddy = cursor.get_mut();
-        assert!(buddy.is_free(), "BuddySystem: Double Free!");
+        assert!(
+            buddy.is_free(),
+            "BuddySystem: Double Free!"
+        );
         *buddy = Buddy::free(page.order);
 
         Self::fixup_map(&mut cursor);
@@ -251,15 +287,14 @@ impl BuddySystem {
 
         // Mark Page struct
         let pfn = Self::idx2pfn(pmm, idx, order);
-        let page = pmm.page_mut(pfn)
-            .expect("idx2pfn should return valid pfn.");
+        let page = pmm.page_mut(pfn).expect("idx2pfn should return valid pfn.");
         *page.order() = order;
 
         Some(pfn)
     }
 
     /// Reserve a page on map. Returns the index of the reserved buddy on map.
-    fn reserve_on_map(&mut self, order: u8) -> Option<usize> {   
+    fn reserve_on_map(&mut self, order: u8) -> Option<usize> {
         let mut cursor_opt = None;
         let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
 
@@ -271,7 +306,9 @@ impl BuddySystem {
         }
 
         // No root contains a block with target order.
-        if cursor_opt.is_none() { return None; }
+        if cursor_opt.is_none() {
+            return None;
+        }
 
         while let Some(ref mut cursor) = cursor_opt {
             if cursor.get().is_reserved() {
@@ -284,7 +321,7 @@ impl BuddySystem {
 
             if cur_order < order {
                 // Rewind
-                cursor_opt = stack.pop();    
+                cursor_opt = stack.pop();
             } else if cur_order == order && cur_order == cur_max_order {
                 // Found block
                 break;
@@ -319,18 +356,16 @@ impl BuddySystem {
         Some(idx)
     }
 
-    fn pfn2idx(pfn: Pfn, order: u8) -> usize {
-        pfn.0.get() >> order
-    }
+    fn pfn2idx(pfn: Pfn, order: u8) -> usize { pfn.0.get() >> order }
+
     fn idx2pfn(pmm: &PhysicalMemoryManager, idx: usize, order: u8) -> Pfn {
         pmm.pfn_from_raw(idx << order).unwrap()
     }
-    const fn depth2order(&self, depth: usize) -> u8 {
-        (self.map.max_depth() - depth) as u8
-    }
-    const fn order2depth(&self, order: u8) -> usize {
-        self.map.max_depth() - order as usize
-    }
+
+    const fn depth2order(&self, depth: usize) -> u8 { (self.map.max_depth() - depth) as u8 }
+
+    const fn order2depth(&self, order: u8) -> usize { self.map.max_depth() - order as usize }
+
     fn fixup_map(cursor: &mut Cursor<&mut ArrayForest<Buddy>, Buddy>) {
         while cursor.depth() != 0 {
             let me = *cursor.get();
@@ -341,51 +376,35 @@ impl BuddySystem {
             cursor.up();
 
             // No need to fix further
-            if *cursor.get_mut() == par { return; }
+            if *cursor.get_mut() == par {
+                return;
+            }
             *cursor.get_mut() = par;
         }
     }
-
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Buddy(u8);
 impl Buddy {
     /// Creates a free buddy.
-    /// 
+    ///
     /// # Undefined Behavior
     /// `order` < `u8::MAX`
     const fn free(order: u8) -> Self {
         debug_assert!(order != u8::MAX);
         Buddy(order + 1)
     }
+
     const fn reserved() -> Self { Buddy(0) }
+
     const fn is_free(self) -> bool { !self.is_reserved() }
+
     const fn is_reserved(self) -> bool { self.0 == 0 }
 
     /// Returns a reference to order of a free buddy. Returns u8::MAX if buddy
     /// is not free.
-    const fn order(&self) -> u8 {
-        self.0 - 1
-    }
+    const fn order(&self) -> u8 { self.0 - 1 }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -404,27 +423,30 @@ impl Buddy {
 // impl BuddySystem {
 
 //     /// Create a buddy system that manages `range`.
-//     /// 
+//     ///
 //     /// # Undefined Behavior
 //     /// `range` should be aligned to [`BUDDY_MIN_BLOCK_SIZE`]
-//     /// 
+//     ///
 //     /// TODO: check range in bound.
-//     /// 
+//     ///
 //     /// # Panic
-//     /// See [`BitForest::new`] for `buf` requirements. 
+//     /// See [`BitForest::new`] for `buf` requirements.
 //     pub fn new(range: Range<usize>, alloc: impl Allocator)
-//         -> Result<Pin<&'static mut Self>, AllocError> 
+//         -> Result<Pin<&'static mut Self>, AllocError>
 //     {
 //         let page_cnt = (range.end - range.start) / BUDDY_MIN_BLOCK_SIZE;
-//         let max_order = page_cnt.next_power_of_two().trailing_zeros() as usize;
+//         let max_order = page_cnt.next_power_of_two().trailing_zeros() as
+// usize;
 
 //         // NOTE: we are leaking tbi_ptr here.
-//         let tbi_ptr: *mut Self = alloc.allocate(Layout::new::<Self>())?.cast().as_ptr();
+//         let tbi_ptr: *mut Self =
+// alloc.allocate(Layout::new::<Self>())?.cast().as_ptr();
 
 //         unsafe { (&raw mut (*tbi_ptr).max_order).write(max_order as u8); }
 //         for i in 0..BUDDY_MAX_ORDER {
-//             let tbi_list_ptr = unsafe { (&raw mut (*tbi_ptr).free_lists[i]) };
-//             let tbi_list = unsafe { tbi_list_ptr.cast::<MaybeUninit<PageList>>().as_mut_unchecked() };
+//             let tbi_list_ptr = unsafe { (&raw mut (*tbi_ptr).free_lists[i])
+// };             let tbi_list = unsafe {
+// tbi_list_ptr.cast::<MaybeUninit<PageList>>().as_mut_unchecked() };
 //             let tbi_list = unsafe { Pin::new_unchecked(tbi_list) };
 //             PageList::init(tbi_list);
 //         }
@@ -441,13 +463,14 @@ impl Buddy {
 //         }
 //     }
 
-//     /// Release the frame pointed by `pfn`. Returns a [`Pfn`] if the page 
+//     /// Release the frame pointed by `pfn`. Returns a [`Pfn`] if the page
 //     /// is merged and need to be released at a higher order.
-//     fn release_at_order(&mut self, pmm: &mut PhysicalMemoryManager, pfn: Pfn) -> Option<Pfn> {
+//     fn release_at_order(&mut self, pmm: &mut PhysicalMemoryManager, pfn: Pfn)
+// -> Option<Pfn> {
 
 //         fn insert_into_free_list(
-//             list: &mut PageList, 
-//             pmm: &mut PhysicalMemoryManager, 
+//             list: &mut PageList,
+//             pmm: &mut PhysicalMemoryManager,
 //             pfn: Pfn
 //         ) {
 //             let mut page = pmm.page_mut(pfn).unwrap();
@@ -472,7 +495,7 @@ impl Buddy {
 
 //         // Merge buddy
 
-//         // SAFETY: Pin<&Page> have same layout as *const Page, and the 
+//         // SAFETY: Pin<&Page> have same layout as *const Page, and the
 //         // resulting pointers are not being dereferenced.
 //         let page_ptr: *const Page = unsafe { mem::transmute_copy(&page) };
 //         let buddy_ptr: *const Page = unsafe { mem::transmute_copy(&buddy) };
@@ -496,23 +519,21 @@ impl Buddy {
 
 
 
-
-//     fn buddy<'a, 'b> (pmm: &'b PhysicalMemoryManager, page: &'a Page) -> Option<Pin<&'b Page>> {
-//         let my_order = page.order;
+//     fn buddy<'a, 'b> (pmm: &'b PhysicalMemoryManager, page: &'a Page) ->
+// Option<Pin<&'b Page>> {         let my_order = page.order;
 //         let buddy_mask = 1 << my_order;
 //         let my_pfn = pmm.pfn(page);
 
-//         let buddy_pfn = my_pfn.0.get() ^ buddy_mask; 
+//         let buddy_pfn = my_pfn.0.get() ^ buddy_mask;
 //         let buddy_pfn = pmm.pfn_from_raw(buddy_pfn)?;
 
-//         Some(pmm.page(buddy_pfn).expect("return value of pfn_from_raw should be valid"))
-//     }
+//         Some(pmm.page(buddy_pfn).expect("return value of pfn_from_raw should
+// be valid"))     }
 // }
 
 
 
-
-/// Static physical memory manager. This is used to initialize and is replaced 
+/// Static physical memory manager. This is used to initialize and is replaced
 /// by [`PhysicalPageManager`]
 struct BootMemoryRecord {
     reserved: ArrayVec<PageRange<LinearSpace>, { Self::MAX_FRAGMENT }>,
@@ -524,10 +545,10 @@ impl BootMemoryRecord {
     const PAGE_SIZE: PageSize = PageSize::Small;
 
     /// Creates a new [`BootMemoryManager`].
-    /// 
-    /// The argument `page_ranges` specifies consists of tuples 
-    /// `(is_free, range)`, where `is_free` specifies if the range is 
-    /// initially free. 
+    ///
+    /// The argument `page_ranges` specifies consists of tuples
+    /// `(is_free, range)`, where `is_free` specifies if the range is
+    /// initially free.
     fn new<'a>(page_ranges: impl Iterator<Item = (bool, &'a PageRange<LinearSpace>)>) -> Self {
         let mut reserved = ArrayVec::new();
         let mut free = ArrayVec::new();
@@ -540,9 +561,7 @@ impl BootMemoryRecord {
                 .map(|x| x.min(range.start()))
                 .or(Some(range.start()));
 
-            mge_max = mge_max
-                .map(|x| x.max(range.end()))
-                .or(Some(range.end()));
+            mge_max = mge_max.map(|x| x.max(range.end())).or(Some(range.end()));
 
             if is_free {
                 free.push(range.clone());
@@ -555,18 +574,24 @@ impl BootMemoryRecord {
             panic!("should not invoke BootMemoryManager::new with no memory");
         };
 
-        free.sort_unstable_by_key(|x|x.start());
-        reserved.sort_unstable_by_key(|x|x.start());
+        free.sort_unstable_by_key(|x| x.start());
+        reserved.sort_unstable_by_key(|x| x.start());
 
-        let managed_range = (mge_min .. mge_max).contained_pages(Self::PAGE_SIZE);
-        Self { reserved, free, managed_range } 
+        let managed_range = (mge_min..mge_max).contained_pages(Self::PAGE_SIZE);
+        Self {
+            reserved,
+            free,
+            managed_range,
+        }
     }
 }
 
 struct BootMemoryManager(spin::Mutex<BootMemoryRecord>);
 impl BootMemoryManager {
     fn new<'a>(page_ranges: impl Iterator<Item = (bool, &'a PageRange<LinearSpace>)>) -> Self {
-        Self (spin::Mutex::new(BootMemoryRecord::new(page_ranges)))
+        Self(spin::Mutex::new(BootMemoryRecord::new(
+            page_ranges,
+        )))
     }
 }
 
@@ -574,25 +599,38 @@ impl PageManager<LinearSpace> for BootMemoryManager {
     fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<LinearSpace>> {
         let mut record = self.0.lock();
 
-        for i in 0 .. record.free.len() {
+        for i in 0..record.free.len() {
             let block = unsafe { record.free.get_unchecked_mut(i) };
             let contained_pages = block.range().contained_pages(page_size);
-            if contained_pages.len() < cnt { continue; }
+            if contained_pages.len() < cnt {
+                continue;
+            }
 
             let start = PageAddr::new(contained_pages.start(), page_size);
             let target = PageRange::new(start, cnt);
 
-            let residuals = block.range().range_sub(target.range())
-                .map(|x| PageRange::try_from_range(x, BootMemoryRecord::PAGE_SIZE)
-                .expect("residual ranges should be aligned to the smallest page size"));
+            let residuals = block.range().range_sub(target.range()).map(|x| {
+                PageRange::try_from_range(x, BootMemoryRecord::PAGE_SIZE)
+                    .expect("residual ranges should be aligned to the smallest page size")
+            });
 
-            match (residuals[0].is_empty(), residuals[1].is_empty()) {
-                (false, false) => { record.free.remove(i); },
-                (true, false) => { record.free[i] = residuals[0]; },
-                (false, true) => { record.free[i] = residuals[1]; },
-                (true, true) => { 
+            let residual_state = (
+                residuals[0].is_empty(),
+                residuals[1].is_empty(),
+            );
+            match residual_state {
+                (false, false) => {
+                    record.free.remove(i);
+                },
+                (true, false) => {
+                    record.free[i] = residuals[0];
+                },
+                (false, true) => {
                     record.free[i] = residuals[1];
-                    record.free.insert(i, residuals[0]); 
+                },
+                (true, true) => {
+                    record.free[i] = residuals[1];
+                    record.free.insert(i, residuals[0]);
                 },
             }
 
@@ -604,13 +642,18 @@ impl PageManager<LinearSpace> for BootMemoryManager {
 
     unsafe fn deallocate_pages(&self, pages: PageRange<LinearSpace>) {
         let mut record = self.0.lock();
-        let pages = PageRange::try_from_range(pages.range(), BootMemoryRecord::PAGE_SIZE)
-            .expect("all page ranges should be aligned to the smallest page size");
+        let pages = PageRange::try_from_range(
+            pages.range(),
+            BootMemoryRecord::PAGE_SIZE,
+        )
+        .expect("all page ranges should be aligned to the smallest page size");
 
-        let idx = record.free.binary_search_by_key(&pages.start(), |x|x.start())
+        let idx = record
+            .free
+            .binary_search_by_key(&pages.start(), |x| x.start())
             .expect_err("cannot deallocate a free'd page");
 
-        let merge_front = (idx > 0) && record.free[idx-1].end() == pages.start();
+        let merge_front = (idx > 0) && record.free[idx - 1].end() == pages.start();
         let merge_back = (idx < record.free.len()) && record.free[idx].start() == pages.end();
 
         match (merge_front, merge_back) {
@@ -621,11 +664,11 @@ impl PageManager<LinearSpace> for BootMemoryManager {
                 record.free[idx].len += pages.len();
             },
             (true, false) => {
-                record.free[idx-1].len += pages.len();
+                record.free[idx - 1].len += pages.len();
             },
             (true, true) => {
-                record.free[idx-1].len += pages.len();
-                record.free[idx-1].len += record.free[idx].len();
+                record.free[idx - 1].len += pages.len();
+                record.free[idx - 1].len += record.free[idx].len();
                 record.free.remove(idx);
             },
         };

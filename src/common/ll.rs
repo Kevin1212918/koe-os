@@ -1,21 +1,25 @@
-use core::{cell::{Cell, UnsafeCell}, marker::{PhantomData, PhantomPinned}, mem::MaybeUninit, pin::Pin, ptr::{self, NonNull}, sync::atomic::AtomicPtr};
+use core::cell::{Cell, UnsafeCell};
+use core::marker::{PhantomData, PhantomPinned};
+use core::mem::MaybeUninit;
+use core::pin::Pin;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::AtomicPtr;
 
-/// A node in an intrusive doubly linked list. 
-/// 
+/// A node in an intrusive doubly linked list.
+///
 /// Note despite using [`AtomicPtr`], concurrent operations require external
 /// synchronization.
-/// 
+///
 /// # Safety
-/// Implementor should ensure `Off` is the byte offset from beginning of the 
+/// Implementor should ensure `Off` is the byte offset from beginning of the
 /// struct to its [`link`].
 pub unsafe trait ListNode<const Off: usize>: Sized {
     fn link(&self) -> &Link {
         let self_ptr = ptr::from_ref(self);
-        
+
         // SAFETY: implementation guarentees self + link_offset points to link
         unsafe {
-            let link_ptr: *const Link = 
-                self_ptr.byte_add(Off).cast();
+            let link_ptr: *const Link = self_ptr.byte_add(Off).cast();
             link_ptr.as_ref_unchecked()
         }
     }
@@ -34,7 +38,7 @@ pub unsafe trait ListNode<const Off: usize>: Sized {
     }
 
     /// Remove a node from the list.
-    /// 
+    ///
     /// # Undefined Behavior
     /// The node should currently be in a list.
     fn remove(&self) {
@@ -49,38 +53,39 @@ pub struct ListHead<const Off: usize, T: ListNode<Off>> {
     _data_typ: PhantomData<T>,
 }
 impl<const Off: usize, T: ListNode<Off>> ListHead<Off, T> {
-    pub fn init(mut head: Pin<&mut MaybeUninit<ListHead<Off, T>>>) {  
+    pub fn init(mut head: Pin<&mut MaybeUninit<ListHead<Off, T>>>) {
         let list = _Link {
             next: Cell::new(head.as_ptr().cast()),
             prev: Cell::new(head.as_ptr().cast()),
         };
-        // list_head will be moved to the correct location after created on 
+        // list_head will be moved to the correct location after created on
         // the stack
         let list_head = ListHead {
-            list, 
-            _data_typ: PhantomData, 
+            list,
+            _data_typ: PhantomData,
         };
         head.set(MaybeUninit::new(list_head));
     }
+
     pub fn is_empty(&self) -> bool { self.list.next == self.list.prev }
 
-    pub fn push_back(&self, elem: Pin<&T>) { 
-        self.list.prepend(elem.link().get());
-    }
+    pub fn push_back(&self, elem: Pin<&T>) { self.list.prepend(elem.link().get()); }
 
-    pub fn push_front(&self, elem: Pin<&T>) { 
-        self.list.append(elem.link().get());
-    }
+    pub fn push_front(&self, elem: Pin<&T>) { self.list.append(elem.link().get()); }
 
     pub fn pop_front(&self) -> Option<*mut T> {
-        if self.is_empty() { return None; }
+        if self.is_empty() {
+            return None;
+        }
         let head = self.list.next().expect("self.list is a cirular list");
         head.remove();
         unsafe { Some(head.stru()) }
     }
 
     pub fn pop_back(&self) -> Option<*mut T> {
-        if self.is_empty() { return None; }
+        if self.is_empty() {
+            return None;
+        }
         let tail = self.list.prev().expect("self.list is a cirular list");
         tail.remove();
         unsafe { Some(tail.stru()) }
@@ -94,13 +99,12 @@ impl Link {
     pub fn new() -> Self {
         let link = _Link {
             next: Cell::new(ptr::null()),
-            prev: Cell::new(ptr::null())
+            prev: Cell::new(ptr::null()),
         };
         Link(link, PhantomPinned)
     }
-    fn get(&self) -> &_Link {
-        &self.0
-    }
+
+    fn get(&self) -> &_Link { &self.0 }
 }
 struct _Link {
     next: Cell<*const _Link>,
@@ -109,13 +113,13 @@ struct _Link {
 
 impl _Link {
     /// Calculate reference to a struct from a reference to its link.
-    /// 
+    ///
     /// # Safety
     /// `self` should be a field in `T`.
     unsafe fn stru<const Off: usize, T: ListNode<Off>>(&self) -> *mut T {
         let self_ptr = ptr::from_ref(self);
-        
-        // SAFETY: implementation guarentees self - link_offset points to 
+
+        // SAFETY: implementation guarentees self - link_offset points to
         // the containing struct
         unsafe { self_ptr.byte_sub(Off) as *mut T }
     }
@@ -162,14 +166,10 @@ impl _Link {
     }
 
     /// Get a reference to the next node.
-    fn next(&self) -> Option<&Self> {
-        unsafe { self.next.get().as_ref() }
-    }
+    fn next(&self) -> Option<&Self> { unsafe { self.next.get().as_ref() } }
 
     /// Get a reference to the previous node.
-    fn prev(&self) -> Option<&Self> {
-        unsafe { self.prev.get().as_ref() }
-    }
+    fn prev(&self) -> Option<&Self> { unsafe { self.prev.get().as_ref() } }
 }
 impl Drop for _Link {
     fn drop(&mut self) {

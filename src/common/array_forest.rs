@@ -1,7 +1,12 @@
-use core::{ops::{Deref, DerefMut}, ptr::NonNull};
+use alloc::alloc::{AllocError, Allocator};
+use alloc::slice;
+use alloc::vec::Vec;
+use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
 
-use alloc::{alloc::{AllocError, Allocator}, slice, vec::Vec};
-use bitvec::{order::Lsb0, slice::BitSlice, view::BitView};
+use bitvec::order::Lsb0;
+use bitvec::slice::BitSlice;
+use bitvec::view::BitView;
 
 // NOTE: Currently ArrayForest leaks memory when dropped.
 
@@ -16,59 +21,64 @@ pub struct ArrayForest<T: 'static> {
 /// A cursor into [`ArrayForest`].
 #[derive(Debug, Clone)]
 pub struct Cursor<ForestRef, T: 'static>
-    where ForestRef: Deref<Target = ArrayForest<T>>
+where
+    ForestRef: Deref<Target = ArrayForest<T>>,
 {
     depth: usize,
     max_depth: usize,
     offset: usize,
-    forest: ForestRef
+    forest: ForestRef,
 }
 
 impl<ForestRef, T: 'static> Cursor<ForestRef, T>
-    where ForestRef: Deref<Target = ArrayForest<T>>
-{   
-    /// Move cursor to the left child. Returns true if successful, false if 
+where
+    ForestRef: Deref<Target = ArrayForest<T>>,
+{
+    /// Move cursor to the left child. Returns true if successful, false if
     /// cursor is at the last level.
     pub const fn left(&mut self) -> bool { self.down(0) }
 
-    /// Move cursor to the right child. Returns true if successful, false if 
+    /// Move cursor to the right child. Returns true if successful, false if
     /// cursor is at the last level.
     pub const fn right(&mut self) -> bool { self.down(1) }
 
-    /// Move cursor down. Returns true if successful, false if cursor is at 
+    /// Move cursor down. Returns true if successful, false if cursor is at
     /// the last level.
-    /// 
+    ///
     /// # Undefined Behavior
     /// `child_idx` should be in `0..B`
     const fn down(&mut self, child_idx: usize) -> bool {
         debug_assert!(child_idx < 2);
-        if self.depth == self.max_depth { return false; }
+        if self.depth == self.max_depth {
+            return false;
+        }
 
         self.depth += 1;
         self.offset = self.offset * 2 + child_idx;
         true
     }
-    
+
     /// Move cursor up. Returns true if successful, false if cursor is at the
     /// first level.
     pub const fn up(&mut self) -> bool {
-        if self.depth == 0 { return false; }
+        if self.depth == 0 {
+            return false;
+        }
 
         self.depth -= 1;
-        self.offset /= 2; 
+        self.offset /= 2;
         true
     }
-    
-    /// Move cursor to the sibling of current node in a binary tree. Returns 
+
+    /// Move cursor to the sibling of current node in a binary tree. Returns
     /// true if  successful, false if cursor is at a root node.
     pub const fn sibling(&mut self) -> bool {
         if self.depth == 0 {
-            false 
+            false
         } else {
             self.offset ^= 1;
             true
         }
-
     }
 
     /// Get immutable reference at cursor.
@@ -78,8 +88,9 @@ impl<ForestRef, T: 'static> Cursor<ForestRef, T>
     }
 
     /// Get mutable reference at cursor.
-    pub fn get_mut(&mut self) -> &mut T 
-        where ForestRef: DerefMut<Target = ArrayForest<T>> 
+    pub fn get_mut(&mut self) -> &mut T
+    where
+        ForestRef: DerefMut<Target = ArrayForest<T>>,
     {
         let idx = self.offset - self.forest.tree_cnt;
         &mut self.forest.buf[idx]
@@ -87,7 +98,7 @@ impl<ForestRef, T: 'static> Cursor<ForestRef, T>
 
     /// Get the depth of the cursor.
     pub const fn depth(&self) -> usize { self.depth }
-    
+
     /// Get max depth of the cursor.
     pub const fn max_depth(&self) -> usize { self.max_depth }
 
@@ -98,18 +109,20 @@ impl<ForestRef, T: 'static> Cursor<ForestRef, T>
 
 impl<T: 'static> ArrayForest<T> {
     const MAX_DEPTH: usize = 63;
+
     /// Create a [`ArrayForest`] backed by `alloc`.
-    /// 
-    /// # Panic 
+    ///
+    /// # Panic
     /// `buf` should point to a piece of memory that fits the layout returned
     /// by [`buf_layout`].
     pub fn new(
-        tree_cnt: usize, 
-        tree_depth: usize, 
+        tree_cnt: usize,
+        tree_depth: usize,
         alloc: impl Allocator,
         fill: T,
-    ) -> Result<Self, AllocError> 
-        where T: Copy
+    ) -> Result<Self, AllocError>
+    where
+        T: Copy,
     {
         let buf_layout = Self::buf_layout(tree_cnt, tree_depth);
         let len = buf_layout.size() / size_of::<T>();
@@ -118,30 +131,27 @@ impl<T: 'static> ArrayForest<T> {
         let buf = unsafe { slice::from_raw_parts_mut(buf_ptr, len) };
 
         buf[0..len].fill(fill);
-        Ok(ArrayForest{buf, tree_cnt, tree_depth})
+        Ok(ArrayForest {
+            buf,
+            tree_cnt,
+            tree_depth,
+        })
     }
 
     /// Calculate the buffer layout required to back a [`ArrayForest`].
-    pub fn buf_layout(tree_cnt: usize, tree_depth: usize) 
-        -> core::alloc::Layout {
-        
+    pub fn buf_layout(tree_cnt: usize, tree_depth: usize) -> core::alloc::Layout {
         // Note this is overestimates buffer size for simplicity
         let len = tree_cnt << tree_depth;
-        core::alloc::Layout::array::<T>(len)
-            .expect("ArrayForest layout should fit the memory")
+        core::alloc::Layout::array::<T>(len).expect("ArrayForest layout should fit the memory")
     }
 
     /// Create a immutable cursor at the `idx` node, on `depth` level.
-    /// 
+    ///
     /// # Undefined Behavior
-    /// If `depth` is greater than or equal to the max tree depth, or 
-    /// `idx >= self.tree_cnt * Self::B.pow(depth)`, the behavior is 
+    /// If `depth` is greater than or equal to the max tree depth, or
+    /// `idx >= self.tree_cnt * Self::B.pow(depth)`, the behavior is
     /// undefined.
-    pub fn cursor<'a> (
-        &'a self, 
-        depth: usize, 
-        idx: usize
-    ) -> Cursor<&'a Self, T> {
+    pub fn cursor<'a>(&'a self, depth: usize, idx: usize) -> Cursor<&'a Self, T> {
         debug_assert!(depth <= self.tree_depth);
 
         let offset_start = self.offset_start(depth);
@@ -151,25 +161,21 @@ impl<T: 'static> ArrayForest<T> {
 
         let offset = offset_start + idx;
 
-        Cursor { 
+        Cursor {
             depth,
             max_depth: self.max_depth(),
             offset,
-            forest: self
+            forest: self,
         }
     }
-    
+
     /// Create a mutable cursor at the `idx` node, on `depth` level.
-    /// 
+    ///
     /// # Undefined Behavior
-    /// If `depth` is greater than or equal to the max tree depth, or 
-    /// `idx >= self.tree_cnt * Self::B.pow(depth)`, the behavior is 
+    /// If `depth` is greater than or equal to the max tree depth, or
+    /// `idx >= self.tree_cnt * Self::B.pow(depth)`, the behavior is
     /// undefined.
-    pub fn cursor_mut<'a> (
-        &'a mut self, 
-        depth: usize, 
-        idx: usize
-    ) -> Cursor<&'a mut Self, T> {
+    pub fn cursor_mut<'a>(&'a mut self, depth: usize, idx: usize) -> Cursor<&'a mut Self, T> {
         debug_assert!(depth <= self.tree_depth);
 
         let offset_start = self.offset_start(depth);
@@ -179,7 +185,7 @@ impl<T: 'static> ArrayForest<T> {
 
         let offset = offset_start + idx;
 
-        Cursor { 
+        Cursor {
             depth,
             max_depth: self.max_depth(),
             offset,
@@ -188,27 +194,27 @@ impl<T: 'static> ArrayForest<T> {
     }
 
     /// Return a immutable slice to all nodes at the given depth.
-    /// 
+    ///
     /// # Undefined Behavior
     /// If `depth` is greater than or equal to the max tree depth, the behavior
     /// is undefined.
     pub fn slice(&self, depth: usize) -> &[T] {
-        let start =  self.offset_start(depth) - self.tree_cnt;
-        let end =  self.offset_start(depth+1) - self.tree_cnt;
+        let start = self.offset_start(depth) - self.tree_cnt;
+        let end = self.offset_start(depth + 1) - self.tree_cnt;
 
-        &self.buf[start .. end]
+        &self.buf[start..end]
     }
 
     /// Return a mutable slice to all nodes at the given depth.
-    /// 
+    ///
     /// # Undefined Behavior
     /// If `depth` is greater than or equal to the max tree depth, the behavior
     /// is undefined.
     pub fn slice_mut(&mut self, depth: usize) -> &mut [T] {
-        let start =  self.offset_start(depth) - self.tree_cnt;
-        let end =  self.offset_start(depth+1) - self.tree_cnt;
+        let start = self.offset_start(depth) - self.tree_cnt;
+        let end = self.offset_start(depth + 1) - self.tree_cnt;
 
-        &mut self.buf[start .. end]
+        &mut self.buf[start..end]
     }
 
     /// Returns the number of levels in a tree.
@@ -219,14 +225,10 @@ impl<T: 'static> ArrayForest<T> {
 
     /// Returns the number of trees in the forest.
     pub const fn tree_cnt(&self) -> usize { self.tree_cnt }
-    
+
     /// Calculate starting offset of `depth` level.
-    /// 
+    ///
     /// # Undefined Behavior
     /// depth should be in `0..Dpt`
-    const fn offset_start(&self, depth: usize) -> usize {
-        self.tree_cnt << depth
-    }
-
-    
+    const fn offset_start(&self, depth: usize) -> usize { self.tree_cnt << depth }
 }

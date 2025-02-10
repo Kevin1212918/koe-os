@@ -1,5 +1,5 @@
 //!
-//! 
+//!
 //! # Virtual Memory Layout
 //! | Address                             | Description               | Size  |
 //! |:------------------------------------|--------------------------:|:-----:|
@@ -8,15 +8,18 @@
 //! |0xFFFFFE8000000000:0xFFFFFF0000000000|Recursive Paging           | 0.5TB |
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
-use core::{alloc::Layout, marker::PhantomData, ops::{Add, Range}, sync::atomic::AtomicUsize};
-
 use alloc::collections::btree_set::BTreeSet;
+use core::alloc::Layout;
+use core::marker::PhantomData;
+use core::ops::{Add, Range};
+use core::sync::atomic::AtomicUsize;
+
 use derive_more::derive::{Into, Sub};
 use multiboot2::BootInformation;
 
-use crate::mem::{addr::{AddrRange}, phy};
-
 use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use crate::mem::addr::AddrRange;
+use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,7 +29,7 @@ impl AddrSpace for KernelHeapSpace {
     const RANGE: Range<usize> = {
         let start = 0xFFFF_C900_0000_0000;
         let end = 0xFFFF_E900_0000_0000;
-        start .. end
+        start..end
     };
 }
 
@@ -35,7 +38,7 @@ pub struct KernelSpace;
 impl KernelSpace {
     pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::LinearSpace> {
         assert!(Self::RANGE.contains(&vaddr.usize()));
-        
+
         Addr::new(vaddr.usize() - Self::RANGE.start)
     }
 }
@@ -44,7 +47,7 @@ impl AddrSpace for KernelSpace {
     const RANGE: Range<usize> = {
         let start = 0xFFFF_FFFF_8000_0000;
         let end = 0xFFFF_FFFF_FF60_0000;
-        start .. end
+        start..end
     };
 }
 
@@ -58,7 +61,7 @@ impl AddrSpace for PhysicalRemapSpace {
     const RANGE: Range<usize> = {
         let start = 0xFFFF_8880_0000_0000;
         let end = 0xFFFF_C880_0000_0000;
-        start .. end
+        start..end
     };
 }
 
@@ -69,7 +72,7 @@ impl AddrSpace for RecursivePagingSpace {
     const RANGE: Range<usize> = {
         let start = 0xFFFF_FE80_0000_0000;
         let end = 0xFFFF_FF00_0000_0000;
-        start .. end
+        start..end
     };
 }
 
@@ -78,9 +81,7 @@ struct VirtMemoryArea<S: VirtSpace> {
     flag: u8,
 }
 impl<S: VirtSpace> PartialEq for VirtMemoryArea<S> {
-    fn eq(&self, other: &Self) -> bool {
-        self.range.start() == other.range.start()
-    }
+    fn eq(&self, other: &Self) -> bool { self.range.start() == other.range.start() }
 }
 impl<S: VirtSpace> Eq for VirtMemoryArea<S> {}
 impl<S: VirtSpace> PartialOrd for VirtMemoryArea<S> {
@@ -100,13 +101,13 @@ struct VirtMemoryManager<S: VirtSpace> {
 impl<S: VirtSpace> VirtMemoryManager<S> {
     fn new() -> Self {
         let mut areas = BTreeSet::new();
-        let init_range = Addr::new(S::RANGE.start) .. Addr::new(S::RANGE.end);
+        let init_range = Addr::new(S::RANGE.start)..Addr::new(S::RANGE.end);
         let init_range = PageRange::try_from_range(init_range, PageSize::Small)
             .expect("VirtSpace should be page aligned.");
 
         let init_area = VirtMemoryArea {
             range: init_range,
-            flag: 0
+            flag: 0,
         };
         areas.insert(init_area);
 
@@ -118,5 +119,4 @@ impl<S: VirtSpace> VirtMemoryManager<S> {
 pub struct KernelHeapManager {
     low_mark: AtomicUsize,
 }
-impl KernelHeapManager {
-}
+impl KernelHeapManager {}

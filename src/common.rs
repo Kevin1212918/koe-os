@@ -1,4 +1,6 @@
-use core::{pin::Pin, ptr::NonNull, sync::atomic::AtomicPtr};
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::sync::atomic::AtomicPtr;
 
 #[allow(non_upper_case_globals)]
 pub const KiB: usize = 1 << 10;
@@ -14,6 +16,5 @@ pub fn hlt() -> ! {
     unreachable!()
 }
 
-pub mod ll;
 pub mod array_forest;
-
+pub mod ll;

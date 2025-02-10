@@ -11,16 +11,16 @@ static MULTIBOOT2_HEADER: Header = Header {
 
 /// Magic value as specified in multiboot2.
 const MAGIC: u32 = 0xE85250D6;
-/// Specifies the CPU instruction set architecture. 
-/// 
+/// Specifies the CPU instruction set architecture.
+///
 /// 0 for i386, 4 for 32-bit MIPS.
 const ARCHITECTURE: u32 = 0;
 const HEADER_LENGTH: u32 = core::mem::size_of::<Header>() as u32;
 const CHECKSUM: u32 = !(MAGIC + ARCHITECTURE + HEADER_LENGTH) + 1;
 const END_TAG: EndTag = EndTag {
-    typ: 0, 
-    flags: 0, 
-    size: 8
+    typ: 0,
+    flags: 0,
+    size: 8,
 };
 
 #[repr(C)]
@@ -41,4 +41,3 @@ struct EndTag {
     flags: u16,
     size: u32,
 }
-

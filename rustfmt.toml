@@ -1,0 +1,18 @@
+max_width = 100
+tab_spaces = 4
+
+blank_lines_lower_bound = 0
+blank_lines_upper_bound = 3
+wrap_comments = true
+fn_call_width = 40
+fn_single_line = true
+format_strings = true
+match_arm_blocks = false
+match_block_trailing_comma = true
+imports_granularity = "Module"
+overflow_delimited_expr = true
+reorder_impl_items = true
+group_imports = "StdExternalCrate"
+single_line_if_else_max_width = 40
+single_line_let_else_max_width = 80
+use_field_init_shorthand = true

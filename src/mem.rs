@@ -1,21 +1,21 @@
+use core::fmt::Write as _;
 use core::ops::{Add, BitAnd, BitOr, Range, Sub};
 
-use addr::Addr;
+use addr::{Addr, PageAddr, PageManager, PageSize};
 use memblock::BootMemoryManager;
 use multiboot2::BootInformation;
-use addr::{PageAddr, PageSize, PageManager};
 use paging::{Flag, MemoryManager, X86_64MemoryManager};
 use virt::{KernelSpace, PhysicalRemapSpace, VirtSpace};
 
-use crate::{common::hlt, drivers::vga::VGA_BUFFER};
-use core::fmt::Write as _;
+use crate::common::hlt;
+use crate::drivers::vga::VGA_BUFFER;
 
+pub mod addr;
+mod alloc;
+pub mod memblock;
+mod paging;
 mod phy;
 mod virt;
-mod alloc;
-mod paging;
-pub mod memblock;
-pub mod addr;
 
 pub use phy::LinearSpace;
 
@@ -30,13 +30,11 @@ extern "C" {
 /// Initialize boot time paging, allocator, as well as parse `mbi_ptr` into
 /// `BootInformation`
 pub fn init(boot_info: BootInformation<'_>, boot_alloc: &BootMemoryManager) {
-    let mem_man = unsafe {X86_64MemoryManager::init(boot_alloc)};
+    let mem_man = unsafe { X86_64MemoryManager::init(boot_alloc) };
 }
 
 #[inline]
-pub const fn kernel_offset_vma() -> usize {
-    KERNEL_OFFSET_VMA
-}
+pub const fn kernel_offset_vma() -> usize { KERNEL_OFFSET_VMA }
 #[inline]
 pub fn kernel_start_vma() -> Addr<KernelSpace> {
     // SAFETY: _KERNEL_START_VMA is on symbol table created by linker. The
@@ -52,19 +50,17 @@ pub fn kernel_end_vma() -> Addr<KernelSpace> {
 #[inline]
 pub fn kernel_start_lma() -> Addr<LinearSpace> {
     // SAFETY: _KERNEL_START_LMA is on symbol table created by linker. The
-    // address of the symbol is the load memory address of kernel, which 
+    // address of the symbol is the load memory address of kernel, which
     // should be loaded during real mode at the actual physical address
-    unsafe {
-        Addr::new(&_KERNEL_START_LMA as *const u8 as usize)
-    }
+    unsafe { Addr::new(&_KERNEL_START_LMA as *const u8 as usize) }
 }
 #[inline]
-pub fn kernel_end_lma() -> Addr<LinearSpace> {
-    kernel_start_lma().byte_add(kernel_size())
-}
+pub fn kernel_end_lma() -> Addr<LinearSpace> { kernel_start_lma().byte_add(kernel_size()) }
 #[inline]
 pub fn kernel_size() -> usize {
-    kernel_end_vma().addr_sub(kernel_start_vma()).try_into()
+    kernel_end_vma()
+        .addr_sub(kernel_start_vma())
+        .try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
 pub unsafe fn kernel_v2p(addr: Addr<KernelSpace>) -> Addr<LinearSpace> {

@@ -1,9 +1,11 @@
-use bitvec::{order::Lsb0, view::BitView};
+use bitvec::order::Lsb0;
+use bitvec::view::BitView;
 use derive_more::derive::{From, Into};
 
-use crate::{common::{GiB, KiB, MiB}, mem::{addr::Addr, LinearSpace}};
-
 use super::Level;
+use crate::common::{GiB, KiB, MiB};
+use crate::mem::addr::Addr;
+use crate::mem::LinearSpace;
 
 
 /// A raw paging table entry without type info.
@@ -22,27 +24,25 @@ pub struct EntryRef<'a> {
     raw: &'a mut RawEntry,
 }
 impl<'a> Into<&'a mut RawEntry> for EntryRef<'a> {
-    fn into(self) -> &'a mut RawEntry {
-        self.raw
-    }
+    fn into(self) -> &'a mut RawEntry { self.raw }
 }
 
 impl<'a> EntryRef<'a> {
-    pub fn is_present(&self) -> bool {
-        !matches!(self.get_target(), EntryTarget::None)
-    }
-    pub fn is_page(&self) -> bool {
-        matches!(self.get_target(), EntryTarget::Page(..))
-    }
+    pub fn is_present(&self) -> bool { !matches!(self.get_target(), EntryTarget::None) }
+
+    pub fn is_page(&self) -> bool { matches!(self.get_target(), EntryTarget::Page(..)) }
+
     pub fn is_table(&self) -> bool {
-        matches!(self.get_target(), EntryTarget::Table(..))
+        matches!(
+            self.get_target(),
+            EntryTarget::Table(..)
+        )
     }
-    pub fn get_level(&self) -> Level {
-        self.level
-    }
-    pub fn into_raw(self) -> &'a mut RawEntry {
-        self.raw
-    }
+
+    pub fn get_level(&self) -> Level { self.level }
+
+    pub fn into_raw(self) -> &'a mut RawEntry { self.raw }
+
     /// Get the referenced target for `Entry`
     pub fn get_target(&self) -> EntryTarget {
         use Level::*;
@@ -50,12 +50,12 @@ impl<'a> EntryRef<'a> {
         // CR3 should be the only entry without present flag, and it always
         // has a target
         if !self.get_flag(Flag::Present).unwrap_or(true) {
-            return EntryTarget::None; 
+            return EntryTarget::None;
         }
 
         let is_page = self.get_flag(Flag::PageSize);
 
-        // Clear out 64:48 and 11:0; if a large/huge page, clear out bit 12 
+        // Clear out 64:48 and 11:0; if a large/huge page, clear out bit 12
         // as well
         let mask = match (self.level, is_page) {
             (PDPT, Some(true)) | (PD, Some(true)) => 0x0000_FFFF_FFFF_E000,
@@ -65,20 +65,18 @@ impl<'a> EntryRef<'a> {
         let addr = Addr::new(self.raw.0 & mask);
 
         match (self.level, is_page) {
-            (PT, None) |
-            (PDPT, Some(true)) | 
-            (PD, Some(true)) => EntryTarget::Page(self.level, addr),
+            (PT, None) | (PDPT, Some(true)) | (PD, Some(true)) =>
+                EntryTarget::Page(self.level, addr),
 
-            (CR3, None) |
-            (PML4, None) |
-            (PDPT, Some(false)) |
-            (PD, Some(false)) => {
-                let next_level = self.level.next_level()
+            (CR3, None) | (PML4, None) | (PDPT, Some(false)) | (PD, Some(false)) => {
+                let next_level = self
+                    .level
+                    .next_level()
                     .expect("All level except PT should have next level");
                 EntryTarget::Table(next_level, addr)
             },
 
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -90,13 +88,15 @@ impl<'a> EntryRef<'a> {
         let align = match (self.level, target) {
             (_, None) => return false,
             (_, Table(..)) => super::table::TABLE_ALIGNMENT,
-            (PDPT, Page(..)) => 1*GiB,
-            (PD, Page(..)) => 2*MiB,
-            (PT, Page(..)) => 4*KiB,
-            _ => unreachable!()
+            (PDPT, Page(..)) => 1 * GiB,
+            (PD, Page(..)) => 2 * MiB,
+            (PT, Page(..)) => 4 * KiB,
+            _ => unreachable!(),
         };
 
-        if !addr.is_aligned_to(align) { return false; }
+        if !addr.is_aligned_to(align) {
+            return false;
+        }
         let mask = !((1 << 48) - align);
 
         self.raw.0 &= mask;
@@ -110,10 +110,12 @@ impl<'a> EntryRef<'a> {
 
         let data_bits = self.raw.0.view_bits::<Lsb0>();
 
-        let present_bit = Present.idx(self.level, false, false)
+        let present_bit = Present
+            .idx(self.level, false, false)
             .map_or(false, |idx| data_bits[idx]);
 
-        let page_size_bit = PageSize.idx(self.level, present_bit, false)
+        let page_size_bit = PageSize
+            .idx(self.level, present_bit, false)
             .map_or(false, |idx| data_bits[idx]);
 
         flag.idx(self.level, present_bit, page_size_bit)
@@ -127,21 +129,21 @@ impl<'a> EntryRef<'a> {
     }
 
     /// Set `flags` to `value`
-    /// 
+    ///
     /// Should not set `Present` or `PageSize` flags
-    pub fn set_flags<const N: usize>(
-        &mut self,
-        flags: [Flag; N],
-        value: bool
-    ) -> bool {
-        let present_bit = flags.iter()
+    pub fn set_flags<const N: usize>(&mut self, flags: [Flag; N], value: bool) -> bool {
+        let present_bit = flags
+            .iter()
             .find(|&&x| matches!(x, Flag::Present))
             .is_some();
-        let page_size_bit = flags.iter()
+        let page_size_bit = flags
+            .iter()
             .find(|&&x| matches!(x, Flag::PageSize))
             .is_some();
 
-        if present_bit || page_size_bit { return false; }
+        if present_bit || page_size_bit {
+            return false;
+        }
 
         let prev_data = *self.raw;
 
@@ -158,46 +160,46 @@ impl<'a> EntryRef<'a> {
 
         true
     }
-    
+
     /// Constructs a `EntryRef` from `Level` and `RawEntry`
-    /// 
+    ///
     /// # Safety
     /// `raw` should be at level `level`.
-    pub unsafe fn from_raw(raw: &'a mut RawEntry, level: Level) -> Self {
-        Self {raw, level}
+    pub unsafe fn from_raw(raw: &'a mut RawEntry, level: Level) -> Self { Self { raw, level } }
+
+    /// Initialize a new `RawEntry` with given flags at `raw`, and return an
+    /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
+    ///
+    /// # Safety
+    /// `addr` should point to a page table/page as specified by a `Entry`
+    /// of `typ` and `flags`
+    pub unsafe fn init<const N: usize>(
+        raw: &'a mut RawEntry,
+        level: Level,
+        addr: Addr<LinearSpace>,
+        flags: [Flag; N],
+    ) -> Option<Self> {
+        let mut new = unsafe { Self::from_raw(raw, level) };
+        unsafe { new.reinit(addr, flags) }.map(|_| new)
     }
 
     /// Initialize a new `RawEntry` with given flags at `raw`, and return an
     /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
-    /// 
+    ///
     /// # Safety
     /// `addr` should point to a page table/page as specified by a `Entry`
     /// of `typ` and `flags`
-    pub unsafe fn init<const N: usize> (
-        raw: &'a mut RawEntry,
-        level: Level, 
-        addr: Addr<LinearSpace>, 
-        flags: [Flag; N]
-    ) -> Option<Self> {
-        let mut new = unsafe {Self::from_raw(raw, level)};
-        unsafe { new.reinit(addr, flags) }.map(|_| new)
-    }
-    
-    /// Initialize a new `RawEntry` with given flags at `raw`, and return an
-    /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
-    /// 
-    /// # Safety
-    /// `addr` should point to a page table/page as specified by a `Entry`
-    /// of `typ` and `flags`
-    pub unsafe fn reinit<const N: usize> (
+    pub unsafe fn reinit<const N: usize>(
         &mut self,
-        addr: Addr<LinearSpace>, 
-        flags: [Flag; N]
+        addr: Addr<LinearSpace>,
+        flags: [Flag; N],
     ) -> Option<()> {
-        let present_bit = flags.iter()
+        let present_bit = flags
+            .iter()
             .find(|&&x| matches!(x, Flag::Present))
             .is_some();
-        let page_size_bit = flags.iter()
+        let page_size_bit = flags
+            .iter()
             .find(|&&x| matches!(x, Flag::PageSize))
             .is_some();
 
@@ -212,30 +214,29 @@ impl<'a> EntryRef<'a> {
         }
 
         self.raw.0 = data;
-        unsafe {self.set_addr(addr)}.then_some(())
+        unsafe { self.set_addr(addr) }.then_some(())
     }
-
 }
 
 /// Reference target of a paging table entry
 pub enum EntryTarget {
     None,
     Table(Level, Addr<LinearSpace>),
-    Page(Level, Addr<LinearSpace>)
+    Page(Level, Addr<LinearSpace>),
 }
 
-/// A flag in a page entry. Currently supports `Present`, `ReadWrite`, 
+/// A flag in a page entry. Currently supports `Present`, `ReadWrite`,
 /// `UserSuper`, `PageSize`, `Global`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, From)]
 pub enum Flag {
-    // Universal set_flags  
+    // Universal set_flags
     Present,
     ReadWrite,
     UserSuper,
     // WriteThru,
     // CacheDisable,
     // Accessed,
-    
+
     // Table/Page
     PageSize,
 
@@ -245,9 +246,9 @@ pub enum Flag {
     Global,
 }
 impl Flag {
-    fn idx(self, level: Level, present_bit: bool, page_size_bit: bool) -> Option<usize>{
-        use Level::*;
+    fn idx(self, level: Level, present_bit: bool, page_size_bit: bool) -> Option<usize> {
         use Flag::*;
+        use Level::*;
 
         return match level {
             CR3 => cr3_idx(self, present_bit, page_size_bit),
@@ -257,9 +258,7 @@ impl Flag {
             PT => pt_idx(self, present_bit, page_size_bit),
         };
 
-        fn cr3_idx(_: Flag, _: bool, _: bool) -> Option<usize> {
-            None
-        }
+        fn cr3_idx(_: Flag, _: bool, _: bool) -> Option<usize> { None }
 
         fn pml4_idx(flag: Flag, present_bit: bool, _: bool) -> Option<usize> {
             match (present_bit, flag) {
@@ -289,10 +288,9 @@ impl Flag {
                 (true, false, UserSuper) => Some(2),
                 (true, false, PageSize) => Some(7),
                 (true, false, _) => None,
-                
             }
         }
-        
+
         fn pd_idx(flag: Flag, present_bit: bool, page_size_bit: bool) -> Option<usize> {
             match (present_bit, page_size_bit, flag) {
                 (false, _, Present) => Some(0),
@@ -309,10 +307,9 @@ impl Flag {
                 (true, false, UserSuper) => Some(2),
                 (true, false, PageSize) => Some(7),
                 (true, false, _) => None,
-                
             }
         }
-        
+
         fn pt_idx(flag: Flag, present_bit: bool, _: bool) -> Option<usize> {
             match (present_bit, flag) {
                 (false, Present) => Some(0),
@@ -325,6 +322,5 @@ impl Flag {
                 (true, _) => None,
             }
         }
-
     }
 }
