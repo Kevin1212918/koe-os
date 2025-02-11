@@ -1,5 +1,6 @@
 //! x86-64 4 level ordinary paging
 
+use alloc::alloc::Allocator;
 use core::arch::asm;
 use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::fmt::Write as _;
@@ -16,7 +17,6 @@ use multiboot2::BootInformation;
 use table::{RawTable, TableRef, TABLE_ALIGNMENT};
 
 use super::addr::{Addr, PageAddr, PageManager, PageSize};
-use super::memblock::BootMemoryManager;
 use super::virt::{RecursivePagingSpace, VirtSpace};
 use super::{phy, LinearSpace};
 use crate::common::hlt;
@@ -32,7 +32,7 @@ pub use entry::Flag;
 
 pub trait MemoryManager {
     /// Initialize `MemoryManager`
-    unsafe fn init(boot_alloc: &BootMemoryManager) -> Self;
+    unsafe fn init() -> Self;
 
     /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any
     /// previous virtual page mapping at `vaddr`.
@@ -77,7 +77,7 @@ type MemManMutex<T> = spin::Mutex<T>;
 pub struct X86_64MemoryManager(MemManMutex<PageStructure>);
 
 impl MemoryManager for X86_64MemoryManager {
-    unsafe fn init(boot_alloc: &BootMemoryManager) -> Self {
+    unsafe fn init() -> Self {
         static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PDPT_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PD_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
@@ -191,16 +191,15 @@ impl MemoryManager for X86_64MemoryManager {
     ) -> Option<()> {
         debug_assert!(vpage.size() == ppage.size());
 
-
         let mut page_structure = self.0.lock();
         let mut walker = unsafe { Walker::new(&mut page_structure, vpage.start()) };
 
-        let mut cur_level = walker.cur().get_level();
+        let mut cur_level = walker.cur().level();
         let target_level = Level::from_page_size(vpage.size());
 
         while cur_level != target_level {
             walker.down(allocator);
-            cur_level = walker.cur().get_level();
+            cur_level = walker.cur().level();
         }
 
         unsafe { walker.cur().reinit(ppage.start(), flags) };
@@ -213,7 +212,18 @@ impl MemoryManager for X86_64MemoryManager {
 
     /// Try translating a virtual address into a physical address. Fails iff
     /// the virtual address is not mapped.
-    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>> { todo!() }
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>> {
+        let mut page_structure = self.0.lock();
+        let mut walker = unsafe { Walker::new(&mut page_structure, vaddr) };
+
+        while walker.try_down().is_some() {}
+
+        match walker.cur().target() {
+            EntryTarget::None => None,
+            EntryTarget::Page(_, addr) => Some(addr),
+            EntryTarget::Table(..) => unreachable!(),
+        }
+    }
 }
 
 struct Walker<'a, T: VirtSpace> {
@@ -236,21 +246,21 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
 
     fn cur(&mut self) -> &mut EntryRef<'a> { &mut self.cur_entry }
 
-    fn try_down(&'a mut self) -> Option<&'a mut EntryRef<'a>> {
+    fn try_down(&mut self) -> Option<&mut EntryRef<'a>> {
         self.cur_entry
-            .get_level()
+            .level()
             .next_level()
-            .map(|_| self.cur_entry.get_target())
+            .map(|_| self.cur_entry.target())
             .filter(|target| matches!(target, EntryTarget::Table(..)))
             .map(|_| unsafe { self.down_unchecked() })
     }
 
     fn down(&mut self, alloc: &impl PageManager<LinearSpace>) -> &mut EntryRef<'a> {
-        if self.cur_entry.get_level().next_level().is_none() {
+        if self.cur_entry.level().next_level().is_none() {
             return self.cur();
         }
 
-        let target = self.cur_entry.get_target();
+        let target = self.cur_entry.target();
         match target {
             EntryTarget::None | EntryTarget::Page(..) => {
                 let table_paddr = alloc.allocate_pages(1, PageSize::Small).unwrap().start();
@@ -265,7 +275,7 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
 
     unsafe fn down_unchecked(&mut self) -> &mut EntryRef<'a> {
         let table_level =
-            self.cur_entry.get_level().next_level().expect(
+            self.cur_entry.level().next_level().expect(
                 "Walker::down_unchecked should not be called when walker is at lowest level",
             );
 
@@ -459,4 +469,18 @@ impl Level {
             PT => Some(PD),
         }
     }
+}
+
+/// A physical memory allocator to hold page table.
+///
+/// This allocator interfaces with raw address instead of page frame because
+/// this is initialized before the global page frames is initialized.
+///
+/// # Safety
+/// Implementor should ensure [`PageTableAllocator::allocate`] returns memory
+/// which fits the page table, and both functions follow the usual requirements
+/// specified in [`alloc::alloc::Allocator`].
+pub unsafe trait PageTableAllocator {
+    fn allocate(&self) -> Addr<LinearSpace>;
+    fn deallocate(&self, addr: Addr<LinearSpace>);
 }

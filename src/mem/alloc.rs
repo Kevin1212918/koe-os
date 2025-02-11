@@ -109,11 +109,7 @@ pub fn allocate_pages<V: VirtSpace>(
 static DUMMY_ALLOC: DummyAllocator = DummyAllocator;
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unimplemented!()
-    }
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 { unimplemented!() }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unimplemented!()
-    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unimplemented!() }
 }

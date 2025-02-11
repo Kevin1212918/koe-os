@@ -18,62 +18,62 @@ use derive_more::derive::{Into, Sub};
 use multiboot2::BootInformation;
 
 use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use super::LinearSpace;
 use crate::mem::addr::AddrRange;
 use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {}
+
+
+/// Marks the lowest bound of static data on heap.
+static HEAP_LOW_MARK: AtomicUsize = AtomicUsize::new(0xFFFF_E900_0000_0000);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelHeapSpace;
+impl KernelHeapSpace {
+    fn low_mark() -> &'static AtomicUsize { &HEAP_LOW_MARK }
+}
 impl VirtSpace for KernelHeapSpace {}
 impl AddrSpace for KernelHeapSpace {
-    const RANGE: Range<usize> = {
-        let start = 0xFFFF_C900_0000_0000;
-        let end = 0xFFFF_E900_0000_0000;
-        start..end
-    };
+    const RANGE: Range<usize> = 0xFFFF_C900_0000_0000..0xFFFF_E900_0000_0000;
 }
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelSpace;
 impl KernelSpace {
     pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::LinearSpace> {
         assert!(Self::RANGE.contains(&vaddr.usize()));
-
         Addr::new(vaddr.usize() - Self::RANGE.start)
     }
 }
 impl VirtSpace for KernelSpace {}
 impl AddrSpace for KernelSpace {
-    const RANGE: Range<usize> = {
-        let start = 0xFFFF_FFFF_8000_0000;
-        let end = 0xFFFF_FFFF_FF60_0000;
-        start..end
-    };
+    const RANGE: Range<usize> = 0xFFFF_FFFF_8000_0000..0xFFFF_FFFF_FF60_0000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysicalRemapSpace;
 impl PhysicalRemapSpace {
     pub const OFFSET: usize = Self::RANGE.start;
+
+    pub const fn p2v(paddr: Addr<LinearSpace>) -> Addr<Self> {
+        Addr::new(paddr.usize() + Self::OFFSET)
+    }
+
+    pub const fn v2p(vaddr: Addr<Self>) -> Addr<LinearSpace> {
+        Addr::new(vaddr.usize() - Self::OFFSET)
+    }
 }
 impl VirtSpace for PhysicalRemapSpace {}
 impl AddrSpace for PhysicalRemapSpace {
-    const RANGE: Range<usize> = {
-        let start = 0xFFFF_8880_0000_0000;
-        let end = 0xFFFF_C880_0000_0000;
-        start..end
-    };
+    const RANGE: Range<usize> = 0xFFFF_8880_0000_0000..0xFFFF_C880_0000_0000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecursivePagingSpace;
 impl VirtSpace for RecursivePagingSpace {}
 impl AddrSpace for RecursivePagingSpace {
-    const RANGE: Range<usize> = {
-        let start = 0xFFFF_FE80_0000_0000;
-        let end = 0xFFFF_FF00_0000_0000;
-        start..end
-    };
+    const RANGE: Range<usize> = 0xFFFF_FE80_0000_0000..0xFFFF_FF00_0000_0000;
 }
 
 struct VirtMemoryArea<S: VirtSpace> {
@@ -114,9 +114,3 @@ impl<S: VirtSpace> VirtMemoryManager<S> {
         Self { areas }
     }
 }
-
-
-pub struct KernelHeapManager {
-    low_mark: AtomicUsize,
-}
-impl KernelHeapManager {}

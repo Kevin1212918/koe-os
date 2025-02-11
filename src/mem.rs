@@ -2,7 +2,6 @@ use core::fmt::Write as _;
 use core::ops::{Add, BitAnd, BitOr, Range, Sub};
 
 use addr::{Addr, PageAddr, PageManager, PageSize};
-use memblock::BootMemoryManager;
 use multiboot2::BootInformation;
 use paging::{Flag, MemoryManager, X86_64MemoryManager};
 use virt::{KernelSpace, PhysicalRemapSpace, VirtSpace};
@@ -12,7 +11,6 @@ use crate::drivers::vga::VGA_BUFFER;
 
 pub mod addr;
 mod alloc;
-pub mod memblock;
 mod paging;
 mod phy;
 mod virt;
@@ -29,9 +27,7 @@ extern "C" {
 
 /// Initialize boot time paging, allocator, as well as parse `mbi_ptr` into
 /// `BootInformation`
-pub fn init(boot_info: BootInformation<'_>, boot_alloc: &BootMemoryManager) {
-    let mem_man = unsafe { X86_64MemoryManager::init(boot_alloc) };
-}
+pub fn init() {}
 
 #[inline]
 pub const fn kernel_offset_vma() -> usize { KERNEL_OFFSET_VMA }

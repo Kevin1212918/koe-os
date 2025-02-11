@@ -28,32 +28,27 @@ impl<'a> Into<&'a mut RawEntry> for EntryRef<'a> {
 }
 
 impl<'a> EntryRef<'a> {
-    pub fn is_present(&self) -> bool { !matches!(self.get_target(), EntryTarget::None) }
+    pub fn is_present(&self) -> bool { !matches!(self.target(), EntryTarget::None) }
 
-    pub fn is_page(&self) -> bool { matches!(self.get_target(), EntryTarget::Page(..)) }
+    pub fn is_page(&self) -> bool { matches!(self.target(), EntryTarget::Page(..)) }
 
-    pub fn is_table(&self) -> bool {
-        matches!(
-            self.get_target(),
-            EntryTarget::Table(..)
-        )
-    }
+    pub fn is_table(&self) -> bool { matches!(self.target(), EntryTarget::Table(..)) }
 
-    pub fn get_level(&self) -> Level { self.level }
+    pub fn level(&self) -> Level { self.level }
 
     pub fn into_raw(self) -> &'a mut RawEntry { self.raw }
 
     /// Get the referenced target for `Entry`
-    pub fn get_target(&self) -> EntryTarget {
+    pub fn target(&self) -> EntryTarget {
         use Level::*;
 
         // CR3 should be the only entry without present flag, and it always
         // has a target
-        if !self.get_flag(Flag::Present).unwrap_or(true) {
+        if !self.flag(Flag::Present).unwrap_or(true) {
             return EntryTarget::None;
         }
 
-        let is_page = self.get_flag(Flag::PageSize);
+        let is_page = self.flag(Flag::PageSize);
 
         // Clear out 64:48 and 11:0; if a large/huge page, clear out bit 12
         // as well
@@ -84,7 +79,7 @@ impl<'a> EntryRef<'a> {
         use EntryTarget::*;
         use Level::*;
 
-        let target = self.get_target();
+        let target = self.target();
         let align = match (self.level, target) {
             (_, None) => return false,
             (_, Table(..)) => super::table::TABLE_ALIGNMENT,
@@ -121,7 +116,7 @@ impl<'a> EntryRef<'a> {
         flag.idx(self.level, present_bit, page_size_bit)
     }
 
-    pub fn get_flag(&self, flag: Flag) -> Option<bool> {
+    pub fn flag(&self, flag: Flag) -> Option<bool> {
         let idx = self.get_flag_idx(flag)?;
         let data_bits = self.raw.0.view_bits::<Lsb0>();
 
@@ -183,7 +178,7 @@ impl<'a> EntryRef<'a> {
         unsafe { new.reinit(addr, flags) }.map(|_| new)
     }
 
-    /// Initialize a new `RawEntry` with given flags at `raw`, and return an
+    /// Initialize a new `RawEntry` with given flags at `addr`, and return an
     /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
     ///
     /// # Safety
