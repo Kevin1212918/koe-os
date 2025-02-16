@@ -1,12 +1,7 @@
 use alloc::alloc::{AllocError, Allocator};
 use alloc::slice;
-use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
-use core::ptr::NonNull;
 
-use bitvec::order::Lsb0;
-use bitvec::slice::BitSlice;
-use bitvec::view::BitView;
 
 // NOTE: Currently ArrayForest leaks memory when dropped.
 

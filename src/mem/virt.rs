@@ -9,15 +9,10 @@
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
 use alloc::collections::btree_set::BTreeSet;
-use core::alloc::Layout;
-use core::marker::PhantomData;
-use core::ops::{Add, Range};
+use core::ops::Range;
 use core::sync::atomic::AtomicUsize;
 
-use derive_more::derive::{Into, Sub};
-use multiboot2::BootInformation;
-
-use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use super::addr::{Addr, AddrSpace, PageRange, PageSize};
 use super::LinearSpace;
 use crate::mem::addr::AddrRange;
 use crate::mem::phy;

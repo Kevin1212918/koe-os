@@ -1,9 +1,8 @@
-use core::cell::{Cell, UnsafeCell};
+use core::cell::Cell;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::MaybeUninit;
 use core::pin::Pin;
-use core::ptr::{self, NonNull};
-use core::sync::atomic::AtomicPtr;
+use core::ptr::{self};
 
 /// A node in an intrusive doubly linked list.
 ///

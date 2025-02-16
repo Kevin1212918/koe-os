@@ -1,18 +1,22 @@
 use alloc::alloc::{AllocError, Allocator};
 
 use arrayvec::ArrayVec;
+use nonmax::NonMaxUsize;
 
+use super::memblock::MemblockAllocator;
 use super::{Pfn, PhysicalMemoryManager};
 use crate::common::array_forest::{ArrayForest, Cursor};
 use crate::mem::addr::PageSize;
+use crate::mem::paging::MemoryManager;
 
-const BUDDY_MAX_ORDER: u8 = 18;
+pub const BUDDY_MAX_ORDER: u8 = 18;
 const BUDDY_MAX_DEPTH: u8 = BUDDY_MAX_ORDER;
-const BUDDY_MIN_BLOCK_SIZE: usize = PageSize::Small.usize();
+pub const BUDDY_MIN_BLOCK_SIZE: usize = PageSize::Small.usize();
 const _: () = assert!(BUDDY_MAX_ORDER < u8::MAX);
 
 pub struct BuddySystem {
     map: ArrayForest<Buddy>,
+    max_order: u8,
 }
 impl BuddySystem {
     /// Create a buddy system that manages `page_cnt` pages.
@@ -24,42 +28,21 @@ impl BuddySystem {
     ///
     /// # Panic
     /// See [`BitForest::new`] for `buf` requirements.
-    pub fn new(page_cnt: usize, alloc: impl Allocator) -> Result<Self, AllocError> {
+    pub fn new(page_cnt: usize, boot_alloc: impl Allocator) -> Result<Self, AllocError> {
         let dummy_page_cnt = page_cnt.next_power_of_two();
 
         let max_order = (dummy_page_cnt.ilog2() as u8).max(BUDDY_MAX_ORDER);
 
         let tree_depth = max_order + 1;
         let tree_cnt = page_cnt.div_ceil(1 << max_order);
-        let mut map = ArrayForest::new(
+        let map = ArrayForest::new(
             tree_cnt,
             tree_depth as usize,
-            alloc,
-            Buddy::free(0),
+            boot_alloc.by_ref(),
+            Buddy::reserved(),
         )?;
-        for d in 0..tree_depth {
-            // Initialize dummy pages as reserved.
 
-
-            let order = max_order - d;
-            let fill_cnt = page_cnt >> order;
-            let partial_order = (page_cnt - (fill_cnt << order))
-                .checked_ilog2()
-                .unwrap_or(0) as u8;
-
-            assert!(partial_order <= order);
-            let fill = Buddy::free(order);
-            let partial = Buddy::free(partial_order);
-            let empty = Buddy::reserved();
-
-            let dslice = map.slice_mut(d as usize);
-            dslice[0..fill_cnt].fill(fill);
-            dslice[fill_cnt] = partial;
-            dslice[fill_cnt + 1..].fill(empty);
-        }
-
-        let buddy = BuddySystem { map };
-
+        let buddy = BuddySystem { map, max_order };
         Ok(buddy)
     }
 
@@ -67,37 +50,73 @@ impl BuddySystem {
     ///
     /// # Undefined Behavior
     /// `pfn` should be previously reserved through this [`BuddySystem`]
-    pub fn free(&mut self, pmm: &mut PhysicalMemoryManager, pfn: Pfn) {
-        let page = pmm.page(pfn).expect("pfn should be valid.");
-        let depth = Self::order2depth(&self, page.order);
-        let idx = Self::pfn2idx(pfn, page.order);
+    ///
+    /// # Safety
+    /// `pfn` should have been reserved from this `BuddySystem`
+    pub unsafe fn free(&mut self, pfn: Pfn, order: u8) {
+        let depth = Self::order2depth(&self, order);
+        let idx = Self::pfn2idx(pfn, order);
 
         let mut cursor = self.map.cursor_mut(depth, idx);
 
         let buddy = cursor.get_mut();
         assert!(
-            buddy.is_free(),
+            buddy.is_reserved(),
             "BuddySystem: Double Free!"
         );
-        *buddy = Buddy::free(page.order);
+        *buddy = Buddy::free(order);
 
         Self::fixup_map(&mut cursor);
     }
 
-    /// Reserve a page.
-    fn reserve(&mut self, pmm: &mut PhysicalMemoryManager, order: u8) -> Option<Pfn> {
-        let idx = self.reserve_on_map(order)?;
+    /// Mark a block as free regardless of if it is previously reserved.
+    ///
+    /// This is used in initialization when transfering over from
+    /// [`MemblockSystem`]
+    ///
+    /// # Safety
+    /// Should not be called outside of initialization.
+    pub unsafe fn free_forced(&mut self, pfn: Pfn, order: u8) {
+        assert!(order <= self.max_order);
 
-        // Mark Page struct
-        let pfn = Self::idx2pfn(pmm, idx, order);
-        let page = pmm.page_mut(pfn).expect("idx2pfn should return valid pfn.");
-        *page.order() = order;
+        let max_depth = self.map.max_depth();
+        let depth = max_depth - order as usize;
+        let idx = Self::pfn2idx(pfn, order);
 
-        Some(pfn)
+        let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
+        let mut cursor_opt = Some(self.map.cursor_mut(depth, idx));
+
+        while let Some(ref mut cursor) = cursor_opt {
+            *cursor.get_mut() = Buddy::free((max_depth - cursor.depth()) as u8);
+            stack.push((cursor.depth(), cursor.idx()));
+            if cursor.left() {
+                continue;
+            }
+            cursor_opt = stack.pop().map(|(depth, idx)| {
+                let mut cursor = self.map.cursor_mut(depth, idx);
+                cursor.right();
+                cursor
+            })
+        }
+
+        Self::fixup_map(&mut self.map.cursor_mut(depth, idx));
     }
 
+    // /// Reserve a page.
+    // pub fn reserve(&mut self, order: u8) -> Option<Pfn> {
+    //     assert!(order <= self.max_order);
+    //     let idx = self.reserve_on_map(order)?;
+    //     // Mark Page struct
+    //     let pfn = Self::idx2pfn(pmm, idx, order);
+    //     let page = pmm.page_mut(pfn).expect("idx2pfn should return valid pfn.");
+    //     *page.order() = order;
+
+    //     Some(pfn)
+    // }
+
     /// Reserve a page on map. Returns the index of the reserved buddy on map.
-    fn reserve_on_map(&mut self, order: u8) -> Option<usize> {
+    pub fn reserve(&mut self, order: u8) -> Option<Pfn> {
+        assert!(order <= self.max_order);
         let mut cursor_opt = None;
         let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
 
@@ -156,7 +175,7 @@ impl BuddySystem {
         *cursor.get_mut() = Buddy::reserved();
         Self::fixup_map(&mut cursor);
 
-        Some(idx)
+        Some(Pfn(NonMaxUsize::new(idx).unwrap()))
     }
 
     fn pfn2idx(pfn: Pfn, order: u8) -> usize { pfn.0.get() >> order }

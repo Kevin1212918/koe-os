@@ -16,7 +16,7 @@ extern crate alloc;
 use core::fmt::Write as _;
 
 use common::hlt;
-use multiboot2::{BootInformation, BootInformationHeader, MemoryAreaType};
+use multiboot2::{BootInformation, BootInformationHeader};
 
 mod boot;
 mod common;

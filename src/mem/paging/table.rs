@@ -1,5 +1,3 @@
-use core::ops::IndexMut;
-
 use super::entry::{EntryRef, RawEntry};
 use super::Level;
 use crate::common::KiB;

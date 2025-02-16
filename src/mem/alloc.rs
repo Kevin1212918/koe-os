@@ -68,16 +68,18 @@
 
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicUsize;
 
 use super::addr::{PageManager, PageSize};
 use super::paging::{Flag, MemoryManager};
 use super::virt::VirtSpace;
 use super::LinearSpace;
+use crate::mem::virt::PhysicalRemapSpace;
 
 pub fn allocate_pages<V: VirtSpace>(
     mmu: &impl MemoryManager,
-    vmm: &impl PageManager<V>,
-    pmm: &impl PageManager<LinearSpace>,
+    vmm: &mut impl PageManager<V>,
+    pmm: &mut impl PageManager<LinearSpace>,
 
     cnt: usize,
     page_size: PageSize,

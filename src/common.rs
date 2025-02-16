@@ -1,7 +1,3 @@
-use core::pin::Pin;
-use core::ptr::NonNull;
-use core::sync::atomic::AtomicPtr;
-
 #[allow(non_upper_case_globals)]
 pub const KiB: usize = 1 << 10;
 #[allow(non_upper_case_globals)]

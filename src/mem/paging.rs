@@ -1,29 +1,20 @@
 //! x86-64 4 level ordinary paging
 
-use alloc::alloc::Allocator;
 use core::arch::asm;
-use core::cell::{SyncUnsafeCell, UnsafeCell};
+use core::cell::SyncUnsafeCell;
 use core::fmt::Write as _;
-use core::iter;
-use core::ops::{Deref, DerefMut, Not, Range};
-use core::ptr::{addr_of, NonNull};
+use core::ops::Range;
+use core::sync::atomic::AtomicBool;
 
-use bitvec::array::BitArray;
-use bitvec::order::Lsb0;
-use bitvec::view::BitView;
-use derive_more::derive::{From, Into};
 use entry::{EntryRef, EntryTarget, RawEntry};
-use multiboot2::BootInformation;
-use table::{RawTable, TableRef, TABLE_ALIGNMENT};
+use table::{RawTable, TableRef};
 
 use super::addr::{Addr, PageAddr, PageManager, PageSize};
 use super::virt::{RecursivePagingSpace, VirtSpace};
-use super::{phy, LinearSpace};
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
+use super::LinearSpace;
 use crate::mem::addr::AddrSpace;
 use crate::mem::virt::KernelSpace;
-use crate::mem::{kernel_end_lma, kernel_end_vma, kernel_size, kernel_start_lma, kernel_start_vma};
+use crate::mem::{kernel_end_vma, kernel_size};
 
 mod entry;
 mod table;
@@ -32,7 +23,7 @@ pub use entry::Flag;
 
 pub trait MemoryManager {
     /// Initialize `MemoryManager`
-    unsafe fn init() -> Self;
+    fn init() -> Self;
 
     /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any
     /// previous virtual page mapping at `vaddr`.
@@ -50,7 +41,7 @@ pub trait MemoryManager {
         vpage: PageAddr<V>,
         ppage: PageAddr<LinearSpace>,
         flags: [Flag; N],
-        allocator: &impl PageManager<LinearSpace>,
+        allocator: &mut impl PageManager<LinearSpace>,
     ) -> Option<()>;
 
     /// Removes mapping at `vaddr`.
@@ -71,16 +62,27 @@ pub trait MemoryManager {
 
 //---------------------------- x86-64 stuff below ---------------------------//
 
+pub static MMU: spin::Lazy<X86_64MemoryManager> = spin::Lazy::new(X86_64MemoryManager::init);
+
 const DEFAULT_PAGE_TABLE_FLAGS: [Flag; 2] = [Flag::Present, Flag::ReadWrite];
 
-type MemManMutex<T> = spin::Mutex<T>;
-pub struct X86_64MemoryManager(MemManMutex<PageStructure>);
+pub struct X86_64MemoryManager(spin::Mutex<PageStructure>);
 
 impl MemoryManager for X86_64MemoryManager {
-    unsafe fn init() -> Self {
+    fn init() -> Self {
         static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PDPT_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PD_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
+        static IS_INIT: AtomicBool = AtomicBool::new(false);
+
+        IS_INIT
+            .compare_exchange(
+                false,
+                true,
+                core::sync::atomic::Ordering::Acquire,
+                core::sync::atomic::Ordering::Relaxed,
+            )
+            .expect("Double initialization!");
 
         let mut pml4: TableRef<'_>;
         let pdpt: TableRef<'_>;
@@ -177,7 +179,7 @@ impl MemoryManager for X86_64MemoryManager {
 
         let mut page_structure = PageStructure(cr3_raw);
         page_structure.store_cr3();
-        let memory_manager = X86_64MemoryManager(MemManMutex::new(page_structure));
+        let memory_manager = X86_64MemoryManager(spin::Mutex::new(page_structure));
 
         memory_manager
     }
@@ -187,7 +189,7 @@ impl MemoryManager for X86_64MemoryManager {
         vpage: PageAddr<V>,
         ppage: PageAddr<LinearSpace>,
         flags: [Flag; N],
-        allocator: &impl PageManager<LinearSpace>,
+        allocator: &mut impl PageManager<LinearSpace>,
     ) -> Option<()> {
         debug_assert!(vpage.size() == ppage.size());
 
@@ -255,7 +257,7 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
             .map(|_| unsafe { self.down_unchecked() })
     }
 
-    fn down(&mut self, alloc: &impl PageManager<LinearSpace>) -> &mut EntryRef<'a> {
+    fn down(&mut self, alloc: &mut impl PageManager<LinearSpace>) -> &mut EntryRef<'a> {
         if self.cur_entry.level().next_level().is_none() {
             return self.cur();
         }

@@ -1,15 +1,12 @@
-use core::fmt::Write as _;
-use core::ops::{Add, BitAnd, BitOr, Range, Sub};
+use core::ops::Deref;
 
-use addr::{Addr, PageAddr, PageManager, PageSize};
+use addr::Addr;
 use multiboot2::BootInformation;
-use paging::{Flag, MemoryManager, X86_64MemoryManager};
-use virt::{KernelSpace, PhysicalRemapSpace, VirtSpace};
+use paging::MMU;
+use virt::{KernelSpace, PhysicalRemapSpace};
 
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
 
-pub mod addr;
+mod addr;
 mod alloc;
 mod paging;
 mod phy;
@@ -25,9 +22,13 @@ extern "C" {
     static _KERNEL_START_LMA: u8;
 }
 
-/// Initialize boot time paging, allocator, as well as parse `mbi_ptr` into
-/// `BootInformation`
-pub fn init() {}
+/// Initialize boot time paging, allocator, as well as parse `BootInformation`
+pub fn init(boot_info: BootInformation) {
+    let memory_info = boot_info
+        .memory_map_tag()
+        .expect("Currently does not support uefi memory map");
+    phy::init(memory_info.memory_areas());
+}
 
 #[inline]
 pub const fn kernel_offset_vma() -> usize { KERNEL_OFFSET_VMA }

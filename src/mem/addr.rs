@@ -1,12 +1,7 @@
+use core::iter;
 use core::marker::PhantomData;
-use core::ops::{BitAnd, Range, RangeBounds, RangeInclusive, Sub};
-use core::{iter, ptr};
+use core::ops::{Add, Range, RangeBounds};
 
-use bitvec::order::Lsb0;
-use bitvec::view::BitView as _;
-use derive_more::derive::{From, Into};
-
-use super::phy::PhySpace;
 use super::virt::VirtSpace;
 use crate::common::{GiB, KiB, MiB};
 
@@ -331,7 +326,7 @@ pub trait PageManager<S: AddrSpace> {
     ///
     /// It is guarenteed that an allocated page will not be allocated again for
     /// the duration of the program.
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
+    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
 
     // /// Allocates contiguous `cnt` of `page_size`-sized pages which starts
     // /// at `at`. If the `cnt` pages starting at `at` is not available to
@@ -343,7 +338,7 @@ pub trait PageManager<S: AddrSpace> {
     ///
     /// # Safety
     /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate_pages(&self, pages: PageRange<S>);
+    unsafe fn deallocate_pages(&mut self, pages: PageRange<S>);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

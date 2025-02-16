@@ -1,4 +1,3 @@
-use core::cell::LazyCell;
 use core::fmt::Write;
 
 use crate::mem::kernel_offset_vma;

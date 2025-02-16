@@ -1,18 +1,17 @@
 use alloc::alloc::{AllocError, Allocator};
 use core::alloc::Layout;
-use core::cell::SyncUnsafeCell;
-use core::ops::{Add, Deref, Range};
+use core::ops::{Add, Range};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
 use arrayvec::ArrayVec;
-use bitflags::bitflags;
+use derive_more::derive::IntoIterator;
 use multiboot2::{MemoryArea, MemoryAreaType};
 
-use crate::mem::addr::{Addr, AddrSpace, PageAddr};
-use crate::mem::paging::{MemoryManager, PageTableAllocator};
+use crate::mem::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
-use crate::mem::{self, LinearSpace};
+use crate::mem::LinearSpace;
 
 #[derive(Debug, Clone, Copy)]
 enum MemTyp {
@@ -23,10 +22,21 @@ enum MemTyp {
 /// An extent of memory used in `BootMemoryManager``. Note present `Memblock`
 /// is considered greater than not present `Memblock`
 #[derive(Debug, Clone, Copy)]
-struct Memblock {
+pub struct Memblock {
     pub base: Addr<LinearSpace>,
     pub size: usize,
-    pub typ: MemTyp,
+    typ: MemTyp,
+}
+impl Memblock {
+    pub fn aligned_split(self, max_order: u8) -> AlignedSplit {
+        AlignedSplit {
+            memblock: self,
+            offset: 0,
+            max_order: max_order as u32,
+        }
+    }
+
+    pub fn order(&self) -> u8 { self.base.usize().trailing_zeros() as u8 }
 }
 impl PartialEq for Memblock {
     fn eq(&self, other: &Self) -> bool { self.base == other.base }
@@ -60,9 +70,12 @@ impl From<&MemoryArea> for Memblock {
     }
 }
 
+
 const MEMBLOCKS_LEN: usize = 128;
 /// A reference to a sorted array of `Memblock`s.
-struct Memblocks {
+#[derive(IntoIterator)]
+pub struct Memblocks {
+    #[into_iterator(owned, ref)]
     data: ArrayVec<Memblock, MEMBLOCKS_LEN>,
 }
 impl Memblocks {
@@ -116,33 +129,6 @@ impl Memblocks {
         true
     }
 
-    // /// Find a block at `at` and cut off a `layout` fitted block. If such block
-    // /// is not found at `at`, try find such block elsewhere.
-    // fn cut_block(&mut self, layout: Layout) -> Option<Memblock> {
-    //     fn find_cut_block_in_range(data: &[Memblock], layout: Layout) ->
-    // Option<(usize, usize)> {         data.iter().enumerate().find_map(|(idx,
-    // b)| {             let unaligned_base = b.base +
-    // (b.size.checked_sub(layout.size())?);             let aligned_base =
-    // unaligned_base - unaligned_base % layout.align();             
-    // (aligned_base >= b.base).then_some((idx, aligned_base))         })
-    //     }
-
-    //     let (cut_idx, cut_base) = find_cut_block_in_range(&self.data, layout)?;
-
-    //     let residual_size = cut_base - self.data[cut_idx].base;
-    //     let base = cut_base;
-    //     let size = self.data[cut_idx].size - residual_size;
-    //     let typ = self.data[cut_idx].typ;
-
-    //     if residual_size != 0 {
-    //         self.data[cut_idx].size = residual_size;
-    //     } else {
-    //         self.data.remove(cut_idx);
-    //     }
-
-    //     Some(Memblock {base, size, typ })
-    // }
-
     fn remove(&mut self, base: Addr<LinearSpace>) -> Option<Memblock> {
         let idx = self.data.binary_search_by_key(&base, |b| b.base).ok()?;
 
@@ -150,9 +136,13 @@ impl Memblocks {
     }
 
     fn pop(&mut self) -> Option<Memblock> { self.data.pop() }
+
+    fn iter(&self) -> impl Iterator<Item = &Memblock> { self.data.iter() }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Memblock> { self.data.iter_mut() }
 }
 
-struct MemblockSystem {
+pub struct MemblockSystem {
     free_blocks: Memblocks,
     reserved_blocks: Memblocks,
     partial_block: Option<Memblock>,
@@ -160,7 +150,7 @@ struct MemblockSystem {
     managed_range: Range<Addr<LinearSpace>>,
 }
 impl MemblockSystem {
-    fn new<T>(memory: &[T]) -> Self
+    pub fn new<T>(memory: &[T]) -> Self
     where
         Memblock: for<'a> From<&'a T>,
     {
@@ -192,7 +182,7 @@ impl MemblockSystem {
         }
     }
 
-    fn reserve(&mut self, layout: Layout) -> Option<Addr<LinearSpace>> {
+    pub fn reserve(&mut self, layout: Layout) -> Option<Addr<LinearSpace>> {
         let partial_block = &mut self.partial_block?;
         self.offset = self.offset.next_multiple_of(layout.align());
         let base = self.offset;
@@ -208,31 +198,126 @@ impl MemblockSystem {
         }
     }
 
-    fn free(&mut self, layout: Layout) { unimplemented!("MemblockSystem cannot free!") }
+    /// Destroys `Memblock` system and returns (free blocks, reserved blocks,
+    /// managed range)
+    pub fn destroy(
+        mut self,
+    ) -> (
+        Memblocks,
+        Memblocks,
+        Range<Addr<LinearSpace>>,
+    ) {
+        if self.offset != 0 && self.partial_block.is_some() {
+            // cut partial block to reserved and free
+            let partial_block = self.partial_block.unwrap();
+            let reserved_base = partial_block.base;
+            let reserved_size = self.offset;
+            let free_base = reserved_base.byte_add(reserved_size);
+            let free_size = partial_block.size - reserved_size;
+
+            self.free_blocks.insert(Memblock {
+                base: free_base,
+                size: free_size,
+                typ: MemTyp::Free,
+            });
+            self.reserved_blocks.insert(Memblock {
+                base: reserved_base,
+                size: reserved_size,
+                typ: MemTyp::Reserved,
+            });
+        }
+        (
+            self.free_blocks,
+            self.reserved_blocks,
+            self.managed_range,
+        )
+    }
+
+    pub fn managed_range(&self) -> Range<Addr<LinearSpace>> { self.managed_range.clone() }
 }
+
+/// An iterator of power-of-2 aligned memblocks splitted from a single memblock.
+pub struct AlignedSplit {
+    memblock: Memblock,
+    offset: usize,
+    max_order: u32,
+}
+impl Iterator for AlignedSplit {
+    type Item = Memblock;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // NOTE: Optimize this shit
+        if self.offset == self.memblock.size {
+            return None;
+        }
+        let offset_order = self.offset.trailing_zeros();
+        let diff_order = (self.memblock.size - self.offset).trailing_zeros();
+        let next_order = offset_order.min(diff_order).min(self.max_order);
+
+        let next_size = 1 << next_order;
+        let next = Memblock {
+            base: self.memblock.base.byte_add(self.offset),
+            size: next_size,
+            typ: self.memblock.typ,
+        };
+        self.offset += next_size;
+        Some(next)
+    }
+}
+
+
 
 //------------------- arch ------------------------
 
-struct MemblockAllocator<'mmu, T: MemoryManager> {
-    memblock: spin::Mutex<MemblockSystem>,
-    mmu: &'mmu T,
+impl PageManager<LinearSpace> for MemblockSystem {
+    fn allocate_pages(
+        &mut self,
+        cnt: usize,
+        page_size: PageSize,
+    ) -> Option<PageRange<LinearSpace>> {
+        let layout = Layout::from_size_align(
+            cnt * page_size.usize(),
+            page_size.alignment(),
+        )
+        .expect("Layout for a page range should be valid");
+        let addr = self.reserve(layout)?;
+        Some(PageRange::new(
+            PageAddr::new(addr, page_size),
+            cnt,
+        ))
+    }
+
+    unsafe fn deallocate_pages(&mut self, _pages: PageRange<LinearSpace>) {
+        unimplemented!("MemblockAllocator cannot deallocate");
+    }
+}
+
+pub struct MemblockAllocator<'b> {
+    memblock: spin::Mutex<&'b mut MemblockSystem>,
     high_mark: AtomicUsize,
 }
-impl<'mmu, T: MemoryManager> MemblockAllocator<'mmu, T> {
-    pub fn new<U>(memory: &[U], mmu: &'mmu T) -> Self
+impl<'b> MemblockAllocator<'b> {
+    /// Create a `MemblockAllocator`
+    ///
+    /// # Safety
+    /// PhysicalRemapSpace should be mapped.
+    pub unsafe fn new<U>(memblock: &'b mut MemblockSystem) -> Self
     where
         Memblock: for<'a> From<&'a U>,
     {
-        let memblock = spin::Mutex::new(MemblockSystem::new(memory));
         let high_mark = AtomicUsize::new(0);
         Self {
-            memblock,
-            mmu,
+            memblock: spin::Mutex::new(memblock),
             high_mark,
         }
     }
+
+    pub fn managed_range(&self) -> Range<Addr<LinearSpace>> {
+        self.memblock.lock().managed_range.clone()
+    }
 }
-unsafe impl<'mmu, T: MemoryManager> Allocator for MemblockAllocator<'mmu, T> {
+
+unsafe impl<'b> Allocator for MemblockAllocator<'b> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         use core::sync::atomic::Ordering;
 
