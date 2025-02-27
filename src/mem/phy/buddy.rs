@@ -1,10 +1,12 @@
+// TODO: refactor depth, order, and idx
+
 use alloc::alloc::{AllocError, Allocator};
 
 use arrayvec::ArrayVec;
 use nonmax::NonMaxUsize;
 
 use super::memblock::MemblockAllocator;
-use super::{Pfn, PhysicalMemoryManager};
+use super::PhysicalMemoryManager;
 use crate::common::array_forest::{ArrayForest, Cursor};
 use crate::mem::addr::PageSize;
 use crate::mem::paging::MemoryManager;
@@ -23,8 +25,6 @@ impl BuddySystem {
     ///
     /// # Undefined Behavior
     /// `range` should be aligned to [`BUDDY_MIN_BLOCK_SIZE`]
-    ///
-    /// TODO: check range in bound.
     ///
     /// # Panic
     /// See [`BitForest::new`] for `buf` requirements.
@@ -48,14 +48,11 @@ impl BuddySystem {
 
     /// Free a reserved page.
     ///
-    /// # Undefined Behavior
-    /// `pfn` should be previously reserved through this [`BuddySystem`]
-    ///
     /// # Safety
     /// `pfn` should have been reserved from this `BuddySystem`
-    pub unsafe fn free(&mut self, pfn: Pfn, order: u8) {
-        let depth = Self::order2depth(&self, order);
-        let idx = Self::pfn2idx(pfn, order);
+    pub unsafe fn free(&mut self, idx: usize, order: u8) {
+        let depth = Self::order_to_depth(&self, order);
+        let idx = idx << order;
 
         let mut cursor = self.map.cursor_mut(depth, idx);
 
@@ -76,12 +73,12 @@ impl BuddySystem {
     ///
     /// # Safety
     /// Should not be called outside of initialization.
-    pub unsafe fn free_forced(&mut self, pfn: Pfn, order: u8) {
+    pub unsafe fn free_forced(&mut self, idx: usize, order: u8) {
         assert!(order <= self.max_order);
 
         let max_depth = self.map.max_depth();
         let depth = max_depth - order as usize;
-        let idx = Self::pfn2idx(pfn, order);
+        let idx = idx << order;
 
         let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
         let mut cursor_opt = Some(self.map.cursor_mut(depth, idx));
@@ -115,7 +112,7 @@ impl BuddySystem {
     // }
 
     /// Reserve a page on map. Returns the index of the reserved buddy on map.
-    pub fn reserve(&mut self, order: u8) -> Option<Pfn> {
+    pub fn reserve(&mut self, order: u8) -> Option<usize> {
         assert!(order <= self.max_order);
         let mut cursor_opt = None;
         let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
@@ -138,7 +135,7 @@ impl BuddySystem {
                 continue;
             }
 
-            let cur_max_order = self.depth2order(cursor.depth());
+            let cur_max_order = self.depth_to_order(cursor.depth());
             let cur_order = cursor.get().order();
 
             if cur_order < order {
@@ -161,7 +158,7 @@ impl BuddySystem {
         drop(stack);
 
         let Some(cursor) = cursor_opt else {
-            unreachable!("A properly sized block should be found under the root.");
+            unreachable!("A fit block should be found under root with the appropriate order.");
         };
         // Found block
         let idx = cursor.idx();
@@ -175,18 +172,12 @@ impl BuddySystem {
         *cursor.get_mut() = Buddy::reserved();
         Self::fixup_map(&mut cursor);
 
-        Some(Pfn(NonMaxUsize::new(idx).unwrap()))
+        Some(idx << order)
     }
 
-    fn pfn2idx(pfn: Pfn, order: u8) -> usize { pfn.0.get() >> order }
+    const fn depth_to_order(&self, depth: usize) -> u8 { (self.map.max_depth() - depth) as u8 }
 
-    fn idx2pfn(pmm: &PhysicalMemoryManager, idx: usize, order: u8) -> Pfn {
-        pmm.pfn_from_raw(idx << order).unwrap()
-    }
-
-    const fn depth2order(&self, depth: usize) -> u8 { (self.map.max_depth() - depth) as u8 }
-
-    const fn order2depth(&self, order: u8) -> usize { self.map.max_depth() - order as usize }
+    const fn order_to_depth(&self, order: u8) -> usize { self.map.max_depth() - order as usize }
 
     fn fixup_map(cursor: &mut Cursor<&mut ArrayForest<Buddy>, Buddy>) {
         while cursor.depth() != 0 {

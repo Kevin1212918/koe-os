@@ -87,11 +87,11 @@ pub fn allocate_pages<V: VirtSpace>(
     let vbase = vmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
     let pbase = pmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
 
-    let ptr = NonNull::new(vbase.start().into_ptr())
+    let ptr = NonNull::new(vbase.base.addr().into_ptr())
         .expect("successfull virtual page allocation should not return null address");
 
-    debug_assert!(vbase.len() == cnt);
-    debug_assert!(pbase.len() == cnt);
+    debug_assert!(vbase.len == cnt);
+    debug_assert!(pbase.len == cnt);
 
     let flags = [Flag::Present, Flag::ReadWrite];
 

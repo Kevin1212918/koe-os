@@ -38,7 +38,8 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     let boot_info = boot_info.expect("boot info not found");
     write!(VGA_BUFFER.lock(), "boot info found\n");
 
-    // write!(VGA_BUFFER.lock(), "mem initalized\n");
+    mem::init(boot_info);
+    write!(VGA_BUFFER.lock(), "mem initalized\n");
 
     hlt()
 }

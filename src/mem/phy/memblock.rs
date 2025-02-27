@@ -8,7 +8,7 @@ use arrayvec::ArrayVec;
 use derive_more::derive::IntoIterator;
 use multiboot2::{MemoryArea, MemoryAreaType};
 
-use crate::mem::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
 use crate::mem::LinearSpace;
@@ -147,7 +147,7 @@ pub struct MemblockSystem {
     reserved_blocks: Memblocks,
     partial_block: Option<Memblock>,
     offset: usize,
-    managed_range: Range<Addr<LinearSpace>>,
+    managed_range: AddrRange<LinearSpace>,
 }
 impl MemblockSystem {
     pub fn new<T>(memory: &[T]) -> Self
@@ -178,7 +178,10 @@ impl MemblockSystem {
             reserved_blocks,
             partial_block,
             offset,
-            managed_range: min_addr..max_addr,
+            managed_range: AddrRange {
+                base: min_addr,
+                size: (max_addr - min_addr) as usize,
+            },
         }
     }
 
@@ -205,7 +208,7 @@ impl MemblockSystem {
     ) -> (
         Memblocks,
         Memblocks,
-        Range<Addr<LinearSpace>>,
+        AddrRange<LinearSpace>,
     ) {
         if self.offset != 0 && self.partial_block.is_some() {
             // cut partial block to reserved and free
@@ -233,7 +236,7 @@ impl MemblockSystem {
         )
     }
 
-    pub fn managed_range(&self) -> Range<Addr<LinearSpace>> { self.managed_range.clone() }
+    pub fn managed_range(&self) -> AddrRange<LinearSpace> { self.managed_range.clone() }
 }
 
 /// An iterator of power-of-2 aligned memblocks splitted from a single memblock.
@@ -277,14 +280,14 @@ impl PageManager<LinearSpace> for MemblockSystem {
     ) -> Option<PageRange<LinearSpace>> {
         let layout = Layout::from_size_align(
             cnt * page_size.usize(),
-            page_size.alignment(),
+            page_size.align(),
         )
         .expect("Layout for a page range should be valid");
         let addr = self.reserve(layout)?;
-        Some(PageRange::new(
-            PageAddr::new(addr, page_size),
-            cnt,
-        ))
+        Some(PageRange {
+            base: PageAddr::new(addr, page_size),
+            len: cnt,
+        })
     }
 
     unsafe fn deallocate_pages(&mut self, _pages: PageRange<LinearSpace>) {
@@ -312,7 +315,7 @@ impl<'b> MemblockAllocator<'b> {
         }
     }
 
-    pub fn managed_range(&self) -> Range<Addr<LinearSpace>> {
+    pub fn managed_range(&self) -> AddrRange<LinearSpace> {
         self.memblock.lock().managed_range.clone()
     }
 }

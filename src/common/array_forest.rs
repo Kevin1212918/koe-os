@@ -97,7 +97,7 @@ where
     /// Get max depth of the cursor.
     pub const fn max_depth(&self) -> usize { self.max_depth }
 
-    /// Get the idx of the cursor.
+    /// Get the idx of the cursor at the current depth.
     pub fn idx(&self) -> usize { self.offset - self.forest.tree_cnt }
 }
 

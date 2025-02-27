@@ -197,7 +197,7 @@ impl MemoryManager for X86_64MemoryManager {
         let mut walker = unsafe { Walker::new(&mut page_structure, vpage.start()) };
 
         let mut cur_level = walker.cur().level();
-        let target_level = Level::from_page_size(vpage.size());
+        let target_level = Level::from_page_size(vpage.page_size());
 
         while cur_level != target_level {
             walker.down(allocator);
@@ -265,9 +265,9 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
         let target = self.cur_entry.target();
         match target {
             EntryTarget::None | EntryTarget::Page(..) => {
-                let table_paddr = alloc.allocate_pages(1, PageSize::Small).unwrap().start();
+                let table_paddr = alloc.allocate_pages(1, PageSize::Small).unwrap().base;
                 unsafe {
-                    self.cur_entry.reinit(table_paddr, DEFAULT_PAGE_TABLE_FLAGS);
+                    self.cur_entry.reinit(table_paddr.into(), DEFAULT_PAGE_TABLE_FLAGS);
                 }
             },
             EntryTarget::Table(..) => (),

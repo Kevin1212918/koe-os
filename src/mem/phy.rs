@@ -47,7 +47,7 @@ fn init_remap(memblock: &mut MemblockSystem) {
     for ppage in managed_pages {
         let vpage = PageAddr::new(
             PhysicalRemapSpace::p2v(ppage.start()),
-            ppage.size(),
+            ppage.page_size(),
         );
         unsafe {
             MMU.map(
@@ -99,9 +99,6 @@ impl Frame {
 
 pub static PMM: spin::Once<spin::Mutex<PhysicalMemoryManager>> = spin::Once::new();
 
-#[derive(Debug, Clone, Copy)]
-pub struct Pfn(NonMaxUsize);
-
 pub struct PhysicalMemoryManager {
     frames: &'static mut [Frame],
     base: PageAddr<LinearSpace>,
@@ -116,22 +113,22 @@ impl PhysicalMemoryManager {
     /// # Safety
     /// PhysicalRemapSpace should be mapped.
     unsafe fn new(
-        managed_range: Range<Addr<LinearSpace>>,
+        managed_range: AddrRange<LinearSpace>,
         mut memblock_system: MemblockSystem,
     ) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
         let boot_alloc = unsafe { MemblockAllocator::new(&mut memblock_system) };
         let managed_pages = managed_range.overlapped_pages(PageSize::Small);
-        let frames_layout = Layout::array::<Frame>(managed_pages.len())
+        let frames_layout = Layout::array::<Frame>(managed_pages.len)
             .expect("Frame layout should not be too large");
         let frames_ptr = boot_alloc
             .allocate(frames_layout)
             .expect("Boot allocation should succeed");
-        let mut frames_ptr = NonNull::slice_from_raw_parts(frames_ptr.cast(), managed_pages.len());
+        let mut frames_ptr = NonNull::slice_from_raw_parts(frames_ptr.cast(), managed_pages.len);
 
         // SAFETY: frames_ptr is allocated from frames_layout
         let frames = unsafe { frames_ptr.as_mut() };
-        let base = PageAddr::new(managed_pages.start(), PageSize::Small);
+        let base = managed_pages.base;
         let mut buddy =
             BuddySystem::new(frames.len(), boot_alloc).expect("Boot Allocator should not fail.");
 
@@ -139,13 +136,12 @@ impl PhysicalMemoryManager {
         for free_block in free_blocks {
             for aligned in free_block.aligned_split(BUDDY_MAX_ORDER) {
                 let idx =
-                    aligned.base.addr_sub(managed_range.start) as usize / PageSize::Small.usize();
-                let pfn = Pfn(NonMaxUsize::new(idx).unwrap());
+                    aligned.base.addr_sub(managed_range.base) as usize / PageSize::Small.usize();
                 let order = aligned.base.usize().trailing_zeros() as u8;
 
                 // SAFETY: Initializing buddy
                 unsafe {
-                    buddy.free_forced(pfn, order);
+                    buddy.free_forced(idx, order);
                 }
             }
         }
@@ -156,54 +152,54 @@ impl PhysicalMemoryManager {
         }
     }
 
-    fn page(&self, pfn: Pfn) -> Option<Pin<&Frame>> {
-        // SAFETY: All frames are pinned
-        self.frames
-            .get(pfn.0.get())
-            .map(|x| unsafe { Pin::new_unchecked(x) })
+    fn frame_size(&self) -> PageSize { self.base.page_size() }
+
+    fn frame(&self, addr: impl Into<Addr<LinearSpace>>) -> Option<&Frame> {
+        self.frame_idx(addr.into()).map(|idx| &self.frames[idx])
     }
 
-    fn page_mut(&mut self, pfn: Pfn) -> Option<Pin<&mut Frame>> {
-        // SAFETY: All frames are pinned
-        self.frames
-            .get_mut(pfn.0.get())
-            .map(|x| unsafe { Pin::new_unchecked(x) })
+    fn frame_mut(&mut self, addr: impl Into<Addr<LinearSpace>>) -> Option<&mut Frame> {
+        self.frame_idx(addr.into()).map(|idx| &mut self.frames[idx])
     }
 
-    const fn pfn_from_raw(&self, pfn: usize) -> Option<Pfn> {
-        if pfn >= self.frames.len() {
-            return None;
-        }
-
-        // SAFETY: pfn is less than self.frames.len(), which is less than max.
-        Some(Pfn(unsafe {
-            NonMaxUsize::new_unchecked(pfn)
-        }))
-    }
-
-    const fn pfn(&self, frame: &Frame) -> Pfn {
-        let page_ptr = ptr::from_ref(frame);
-        // SAFETY: Page structs are all located within PMM.frames
-        let idx: isize = unsafe { page_ptr.offset_from(self.frames_ptr()) };
-        let idx: usize = idx as usize;
-        // SAFETY: idx cannot be too large
-        Pfn(unsafe { NonMaxUsize::new_unchecked(idx) })
+    fn frame_idx(&self, addr: Addr<LinearSpace>) -> Option<usize> {
+        let byte_offset: usize = (addr - self.base.addr()).try_into().ok()?;
+        let idx = byte_offset >> self.frame_size().order();
+        (idx < self.frames.len()).then_some(idx)
     }
 
     const fn frames_ptr(&self) -> *const Frame { &raw const self.frames[0] }
 }
 
 impl PageManager<LinearSpace> for PhysicalMemoryManager {
-    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) 
-        -> Option<PageRange<LinearSpace>> 
-    {   
-        let spage_cnt = cnt * (page_size.usize() / PageSize::Small.usize());
-        let order = spage_cnt.next_power_of_two().ilog2();
-        let pfn = self.buddy.reserve(order)?;
+    fn allocate_pages(
+        &mut self,
+        cnt: usize,
+        page_size: PageSize,
+    ) -> Option<PageRange<LinearSpace>> {
+        let frame_cnt = cnt * (page_size.usize() / self.frame_size().usize());
+        let order = frame_cnt.next_power_of_two().ilog2() as u8;
+        let frame_idx = self.buddy.reserve(order)?;
+        self.frames[frame_idx].order = order;
+
+        let base = self
+            .base
+            .checked_page_add(frame_idx)
+            .expect("index returned by buddy system should be correctly sized");
+        let len = frame_cnt.next_power_of_two();
+        Some(PageRange { base, len })
     }
 
     unsafe fn deallocate_pages(&mut self, pages: PageRange<LinearSpace>) {
-        todo!()
+        let frame_idx = self
+            .frame_idx(pages.base.into())
+            .expect("pages should be valid when deallocating");
+        let frame_order = self.frames[frame_idx].order;
+        // SAFETY: Guarenteed by caller to be allocated from buddy.
+        unsafe {
+            self.buddy.free(frame_idx, frame_order);
+        }
+        self.frames[frame_idx].order = 0;
     }
 }
 
@@ -216,11 +212,11 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
 /// Note this only considers the memory usage before `kmain` is called.
 fn initial_free_memory_areas<'boot>(
     boot_info: &'boot BootInformation,
-) -> impl Iterator<Item = Range<Addr<LinearSpace>>> + 'boot {
-    let mbi_range = unsafe {
+) -> impl Iterator<Item = AddrRange<LinearSpace>> + 'boot {
+    let mbi_range = {
         let start = Addr::new(boot_info.start_address());
         let end = Addr::new(boot_info.end_address());
-        start..end
+        AddrRange::from(start..end)
     };
     let memory_areas = boot_info
         .memory_map_tag()
@@ -228,14 +224,14 @@ fn initial_free_memory_areas<'boot>(
         .memory_areas();
 
     let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
-    let kernel_area = kernel_start_lma()..kernel_end_lma();
+    let kernel_area: AddrRange<LinearSpace> = (kernel_start_lma()..kernel_end_lma()).into();
     memory_areas
         .iter()
         .filter(move |area| area.typ() == available)
         .map(|area| unsafe {
             let start = Addr::new(area.start_address() as usize);
             let end = Addr::new(area.end_address() as usize);
-            start..end
+            AddrRange::from(start..end)
         })
         .flat_map(move |range| range.range_sub(kernel_area.clone()))
         .filter(|x| !x.is_empty())

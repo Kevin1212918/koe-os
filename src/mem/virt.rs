@@ -76,36 +76,17 @@ struct VirtMemoryArea<S: VirtSpace> {
     flag: u8,
 }
 impl<S: VirtSpace> PartialEq for VirtMemoryArea<S> {
-    fn eq(&self, other: &Self) -> bool { self.range.start() == other.range.start() }
+    fn eq(&self, other: &Self) -> bool { self.range.base.addr() == other.range.base.addr() }
 }
 impl<S: VirtSpace> Eq for VirtMemoryArea<S> {}
 impl<S: VirtSpace> PartialOrd for VirtMemoryArea<S> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.range.start().partial_cmp(&other.range.start())
+        self.range.base.addr().partial_cmp(&other.range.base.addr())
     }
 }
 impl<S: VirtSpace> Ord for VirtMemoryArea<S> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.range.start().cmp(&other.range.start())
+        self.range.base.addr().cmp(&other.range.base.addr())
     }
 }
 
-struct VirtMemoryManager<S: VirtSpace> {
-    areas: BTreeSet<VirtMemoryArea<S>>,
-}
-impl<S: VirtSpace> VirtMemoryManager<S> {
-    fn new() -> Self {
-        let mut areas = BTreeSet::new();
-        let init_range = Addr::new(S::RANGE.start)..Addr::new(S::RANGE.end);
-        let init_range = PageRange::try_from_range(init_range, PageSize::Small)
-            .expect("VirtSpace should be page aligned.");
-
-        let init_area = VirtMemoryArea {
-            range: init_range,
-            flag: 0,
-        };
-        areas.insert(init_area);
-
-        Self { areas }
-    }
-}
