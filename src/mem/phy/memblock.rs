@@ -1,6 +1,10 @@
 use alloc::alloc::{AllocError, Allocator};
 use core::alloc::Layout;
+use core::cell::SyncUnsafeCell;
+use core::fmt::Write as _;
+use core::mem::MaybeUninit;
 use core::ops::{Add, Range};
+use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
@@ -8,12 +12,22 @@ use arrayvec::ArrayVec;
 use derive_more::derive::IntoIterator;
 use multiboot2::{MemoryArea, MemoryAreaType};
 
+use crate::common::hlt;
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
 use crate::mem::LinearSpace;
 
-#[derive(Debug, Clone, Copy)]
+pub fn init(memory_areas: &[MemoryArea]) -> Pin<&mut MemblockSystem> {
+    // SAFETY: BMM is not accessed elsewhere in the module, and init is called
+    // only once.
+    let bmm = unsafe { BMM.get().as_mut_unchecked() };
+    MemblockSystem::init_pinned(Pin::static_mut(bmm), memory_areas)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MemTyp {
     Free,
     Reserved,
@@ -28,10 +42,38 @@ pub struct Memblock {
     typ: MemTyp,
 }
 impl Memblock {
-    pub fn aligned_split(self, max_order: u8) -> AlignedSplit {
+    /// Returns an iterator of power-of-2 aligned memblocks, whose order is
+    /// in between `min_order` and `max_order`, inclusive.
+    pub fn aligned_split(mut self, min_order: u8, max_order: u8) -> AlignedSplit {
+        'success: {
+            let min_align = 1 << min_order;
+
+            let Some(base) = self.base.align_ceil(min_align) else {
+                break 'success;
+            };
+
+            self.base = base;
+
+            let Some(end) = (self.base + self.size).align_floor(min_align) else {
+                break 'success;
+            };
+
+            self.size = match (end - base).try_into() {
+                Ok(x) => x,
+                Err(_) => break 'success,
+            };
+
+            return AlignedSplit {
+                memblock: self,
+                offset: 0,
+                max_order: max_order as u32,
+            };
+        }
+
+        // Returning an empty iterator.
         AlignedSplit {
             memblock: self,
-            offset: 0,
+            offset: self.size,
             max_order: max_order as u32,
         }
     }
@@ -79,9 +121,9 @@ pub struct Memblocks {
     data: ArrayVec<Memblock, MEMBLOCKS_LEN>,
 }
 impl Memblocks {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
-            data: ArrayVec::new(),
+            data: ArrayVec::new_const(),
         }
     }
 
@@ -95,20 +137,22 @@ impl Memblocks {
         let mut merge_prev: Option<usize> = None;
         let mut merge_next: Option<usize> = None;
 
-        if pivot > 0 {
-            // SAFETY: Given pivot > 0, pivot - 1 should be in bound
-            let prev = unsafe { self.data.get_unchecked(pivot - 1) };
+        // FIXME: index out of bound in this function
+
+        // We use wrapping_sub so that when pivot is 0, it is safely wrapped
+        // to usize::MAX, which should not be a valid idx anyways.
+        if let Some(prev) = self.data.get(pivot.wrapping_sub(1)) {
             debug_assert!(prev.base <= block.base);
             if block.base.addr_sub(prev.base) as usize == prev.size {
                 merge_prev = Some(pivot - 1)
-            };
+            }
         }
 
-        // SAFETY: pivot should be in bound
-        let next = unsafe { self.data.get_unchecked(pivot) };
-        debug_assert!(next.base >= block.base);
-        if next.base.addr_sub(block.base) as usize == block.size {
-            merge_next = Some(pivot);
+        if let Some(next) = self.data.get(pivot) {
+            debug_assert!(next.base >= block.base);
+            if next.base.addr_sub(block.base) as usize == block.size {
+                merge_next = Some(pivot);
+            }
         }
 
         match (merge_prev, merge_next) {
@@ -142,6 +186,8 @@ impl Memblocks {
     fn iter_mut(&mut self) -> impl Iterator<Item = &mut Memblock> { self.data.iter_mut() }
 }
 
+static BMM: SyncUnsafeCell<MaybeUninit<MemblockSystem>> =
+    SyncUnsafeCell::new(MaybeUninit::uninit());
 pub struct MemblockSystem {
     free_blocks: Memblocks,
     reserved_blocks: Memblocks,
@@ -150,39 +196,59 @@ pub struct MemblockSystem {
     managed_range: AddrRange<LinearSpace>,
 }
 impl MemblockSystem {
-    pub fn new<T>(memory: &[T]) -> Self
+    pub fn init_pinned<'s, 'm, T>(
+        mut slot: Pin<&'s mut MaybeUninit<MemblockSystem>>,
+        memory: &'m [T],
+    ) -> Pin<&'s mut MemblockSystem>
     where
         Memblock: for<'a> From<&'a T>,
     {
-        let mut free_blocks = Memblocks::new();
-        let mut reserved_blocks = Memblocks::new();
+        let tbi = slot.as_mut_ptr();
+        // SAFETY: Initializing free_blocks
+        unsafe { (&raw mut ((*tbi).free_blocks)).write(Memblocks::new()) };
+        // SAFETY: Initializing reserved_blocks
+        unsafe { (&raw mut ((*tbi).reserved_blocks)).write(Memblocks::new()) };
 
-        let mut min_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.end);
+        let mut min_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.end - 1);
         let mut max_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.start);
 
         for block in memory.iter().map(|x| Memblock::from(x)) {
+            // Skip the block if it is reserved.
+            if block.typ == MemTyp::Reserved {
+                continue;
+            }
+
             min_addr = min_addr.min(block.base);
-            max_addr = max_addr.max(block.base.byte_add(block.size));
+            max_addr = max_addr.max(block.base + block.size);
 
-            match block.typ {
-                MemTyp::Free => free_blocks.insert(block),
-                MemTyp::Reserved => reserved_blocks.insert(block),
+            let blocks_ptr = match block.typ {
+                // SAFETY: deref in place expression is safe..
+                MemTyp::Free => unsafe { &raw mut (*tbi).free_blocks },
+                MemTyp::Reserved => unsafe { &raw mut (*tbi).reserved_blocks },
             };
+            // SAFETY: blocks_ptr was initialized at the beginning of this
+            // function.
+            unsafe { blocks_ptr.as_mut_unchecked().insert(block) };
         }
 
-        let partial_block = free_blocks.pop();
+        // SAFETY: free_blocks was initalized at the beginning of this function.
+        let partial_block = unsafe { (&raw mut (*tbi).free_blocks).as_mut_unchecked().pop() };
         let offset = 0;
+        let managed_range = AddrRange {
+            base: min_addr,
+            size: (max_addr - min_addr) as usize,
+        };
 
-        Self {
-            free_blocks,
-            reserved_blocks,
-            partial_block,
-            offset,
-            managed_range: AddrRange {
-                base: min_addr,
-                size: (max_addr - min_addr) as usize,
-            },
-        }
+        // SAFETY: Initializing partial_block
+        unsafe { (&raw mut ((*tbi).partial_block)).write(partial_block) };
+        // SAFETY: Initializing offset
+        unsafe { (&raw mut ((*tbi).offset)).write(offset) };
+        // SAFETY: Initializing managed_range
+        unsafe { (&raw mut ((*tbi).managed_range)).write(managed_range) };
+
+        // SAFETY: slot.map_unchecked_mut returns reference to an union variant
+        // of the pinned value. tbi is initialized from above.
+        unsafe { slot.map_unchecked_mut(|tbi| tbi.assume_init_mut()) }
     }
 
     pub fn reserve(&mut self, layout: Layout) -> Option<Addr<LinearSpace>> {
@@ -192,6 +258,11 @@ impl MemblockSystem {
         self.offset += layout.size();
 
         if self.offset > partial_block.size {
+            log!("{:#?}\n", layout);
+            log!("{}\n", partial_block.size);
+            log!("{}\n", self.offset);
+            hlt();
+
             self.reserved_blocks.insert(*partial_block);
             self.partial_block = self.free_blocks.pop();
             self.offset = 0;
@@ -201,42 +272,40 @@ impl MemblockSystem {
         }
     }
 
-    /// Destroys `Memblock` system and returns (free blocks, reserved blocks,
-    /// managed range)
-    pub fn destroy(
-        mut self,
-    ) -> (
-        Memblocks,
-        Memblocks,
-        AddrRange<LinearSpace>,
-    ) {
-        if self.offset != 0 && self.partial_block.is_some() {
-            // cut partial block to reserved and free
-            let partial_block = self.partial_block.unwrap();
-            let reserved_base = partial_block.base;
-            let reserved_size = self.offset;
-            let free_base = reserved_base.byte_add(reserved_size);
-            let free_size = partial_block.size - reserved_size;
-
-            self.free_blocks.insert(Memblock {
-                base: free_base,
-                size: free_size,
-                typ: MemTyp::Free,
-            });
-            self.reserved_blocks.insert(Memblock {
-                base: reserved_base,
-                size: reserved_size,
-                typ: MemTyp::Reserved,
-            });
+    /// Split the partial block into a free and a reserved block and insert
+    /// into the respective [`Memblocks`]. The `MemblockSystem` should not
+    /// be modified after.
+    pub fn freeze(&mut self) {
+        let Some(partial_block) = self.partial_block.take() else {
+            return;
+        };
+        if self.offset == 0 {
+            self.free_blocks.insert(partial_block);
         }
-        (
-            self.free_blocks,
-            self.reserved_blocks,
-            self.managed_range,
-        )
+
+        // cut partial block to reserved and free
+        let reserved_base = partial_block.base;
+        let reserved_size = self.offset;
+        let free_base = reserved_base.byte_add(reserved_size);
+        let free_size = partial_block.size - reserved_size;
+
+        self.free_blocks.insert(Memblock {
+            base: free_base,
+            size: free_size,
+            typ: MemTyp::Free,
+        });
+        self.reserved_blocks.insert(Memblock {
+            base: reserved_base,
+            size: reserved_size,
+            typ: MemTyp::Reserved,
+        });
     }
 
     pub fn managed_range(&self) -> AddrRange<LinearSpace> { self.managed_range.clone() }
+
+    pub fn free_blocks(&self) -> &Memblocks { &self.free_blocks }
+
+    pub fn reserved_blocks(&self) -> &Memblocks { &self.reserved_blocks }
 }
 
 /// An iterator of power-of-2 aligned memblocks splitted from a single memblock.
@@ -250,7 +319,7 @@ impl Iterator for AlignedSplit {
 
     fn next(&mut self) -> Option<Self::Item> {
         // NOTE: Optimize this shit
-        if self.offset == self.memblock.size {
+        if self.offset >= self.memblock.size {
             return None;
         }
         let offset_order = self.offset.trailing_zeros();

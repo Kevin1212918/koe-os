@@ -12,8 +12,9 @@ fn panic(info: &PanicInfo) -> ! {
     vga_buffer.set_color(Color::Red, Color::Black, true);
     write!(
         *vga_buffer,
-        "KERNEL PANIC: {}",
-        info.message()
+        "KERNEL PANIC: {} at \n{:?}",
+        info.message(),
+        info.location(),
     );
     drop(vga_buffer);
     hlt()

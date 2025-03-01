@@ -79,6 +79,7 @@ dependencies = [
  "derive_more",
  "multiboot2",
  "nonmax",
+ "pinned-init",
  "spin",
 ]
 
@@ -127,6 +128,32 @@ name = "nonmax"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
+
+[[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pinned-init"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28139e842fd1f97cbff715492443ec6a49d31d72bb3948ff75a7a5047595b15"
+dependencies = [
+ "paste",
+ "pinned-init-macro",
+]
+
+[[package]]
+name = "pinned-init-macro"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "569a3fcf0e6334c6c46c1507f83a99ba30ae9cdc5761bdb2ca40f7eb55138bd4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "proc-macro2"

@@ -1,6 +1,7 @@
 // TODO: refactor depth, order, and idx
 
 use alloc::alloc::{AllocError, Allocator};
+use core::fmt::Write as _;
 
 use arrayvec::ArrayVec;
 use nonmax::NonMaxUsize;
@@ -8,6 +9,9 @@ use nonmax::NonMaxUsize;
 use super::memblock::MemblockAllocator;
 use super::PhysicalMemoryManager;
 use crate::common::array_forest::{ArrayForest, Cursor};
+use crate::common::hlt;
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::PageSize;
 use crate::mem::paging::MemoryManager;
 
@@ -23,15 +27,12 @@ pub struct BuddySystem {
 impl BuddySystem {
     /// Create a buddy system that manages `page_cnt` pages.
     ///
-    /// # Undefined Behavior
-    /// `range` should be aligned to [`BUDDY_MIN_BLOCK_SIZE`]
-    ///
     /// # Panic
     /// See [`BitForest::new`] for `buf` requirements.
     pub fn new(page_cnt: usize, boot_alloc: impl Allocator) -> Result<Self, AllocError> {
         let dummy_page_cnt = page_cnt.next_power_of_two();
 
-        let max_order = (dummy_page_cnt.ilog2() as u8).max(BUDDY_MAX_ORDER);
+        let max_order = (dummy_page_cnt.ilog2() as u8).min(BUDDY_MAX_ORDER);
 
         let tree_depth = max_order + 1;
         let tree_cnt = page_cnt.div_ceil(1 << max_order);
@@ -52,7 +53,7 @@ impl BuddySystem {
     /// `pfn` should have been reserved from this `BuddySystem`
     pub unsafe fn free(&mut self, idx: usize, order: u8) {
         let depth = Self::order_to_depth(&self, order);
-        let idx = idx << order;
+        let idx = idx >> order;
 
         let mut cursor = self.map.cursor_mut(depth, idx);
 
@@ -78,7 +79,7 @@ impl BuddySystem {
 
         let max_depth = self.map.max_depth();
         let depth = max_depth - order as usize;
-        let idx = idx << order;
+        let idx = idx >> order;
 
         let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
         let mut cursor_opt = Some(self.map.cursor_mut(depth, idx));
@@ -89,6 +90,7 @@ impl BuddySystem {
             if cursor.left() {
                 continue;
             }
+
             cursor_opt = stack.pop().map(|(depth, idx)| {
                 let mut cursor = self.map.cursor_mut(depth, idx);
                 cursor.right();

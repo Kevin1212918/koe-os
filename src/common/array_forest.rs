@@ -1,7 +1,11 @@
 use alloc::alloc::{AllocError, Allocator};
 use alloc::slice;
+use core::fmt::Write as _;
 use core::ops::{Deref, DerefMut};
 
+use crate::common::hlt;
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 
 // NOTE: Currently ArrayForest leaks memory when dropped.
 
@@ -98,7 +102,7 @@ where
     pub const fn max_depth(&self) -> usize { self.max_depth }
 
     /// Get the idx of the cursor at the current depth.
-    pub fn idx(&self) -> usize { self.offset - self.forest.tree_cnt }
+    pub fn idx(&self) -> usize { self.offset - self.forest.offset_start(self.depth) }
 }
 
 

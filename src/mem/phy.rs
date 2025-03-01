@@ -1,5 +1,6 @@
 use alloc::alloc::Allocator;
 use core::alloc::Layout;
+use core::fmt::Write as _;
 use core::ops::{Deref, Range};
 use core::pin::Pin;
 use core::ptr::{self, slice_from_raw_parts_mut, NonNull};
@@ -16,7 +17,9 @@ use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
 use crate::common::ll::ListNode;
-use crate::common::TiB;
+use crate::common::{hlt, KiB, TiB};
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::AddrRange;
 use crate::mem::{kernel_end_lma, paging};
 
@@ -24,21 +27,20 @@ mod buddy;
 mod memblock;
 
 pub fn init(memory_areas: &[MemoryArea]) {
-    let mut memblock = MemblockSystem::new(memory_areas);
+    let mut memblock = memblock::init(memory_areas);
     let managed_range = memblock.managed_range().clone();
-    init_remap(&mut memblock);
+    init_remap(memblock.as_mut().get_mut());
 
     // init PMM
     PMM.call_once(|| {
         // SAFETY: PhysicalRemap was mapped.
-        let pmm = unsafe { PhysicalMemoryManager::new(managed_range, memblock) };
+        let pmm = unsafe { PhysicalMemoryManager::new(managed_range, memblock.get_mut()) };
         spin::Mutex::new(pmm)
     });
 }
 
 fn init_remap(memblock: &mut MemblockSystem) {
     use paging::Flag;
-
     let managed_range = memblock.managed_range();
     let managed_pages = managed_range.overlapped_pages(PageSize::Huge);
     const PHYSICAL_REMAP_FLAGS: [Flag; 4] =
@@ -98,6 +100,8 @@ impl Frame {
 
 
 pub static PMM: spin::Once<spin::Mutex<PhysicalMemoryManager>> = spin::Once::new();
+pub const FRAME_ORDER: u8 = PageSize::MIN.order();
+pub const FRAME_SIZE: usize = PageSize::MIN.usize();
 
 pub struct PhysicalMemoryManager {
     frames: &'static mut [Frame],
@@ -114,10 +118,10 @@ impl PhysicalMemoryManager {
     /// PhysicalRemapSpace should be mapped.
     unsafe fn new(
         managed_range: AddrRange<LinearSpace>,
-        mut memblock_system: MemblockSystem,
+        memblock_system: &mut MemblockSystem,
     ) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
-        let boot_alloc = unsafe { MemblockAllocator::new(&mut memblock_system) };
+        let boot_alloc = unsafe { MemblockAllocator::new(memblock_system) };
         let managed_pages = managed_range.overlapped_pages(PageSize::Small);
         let frames_layout = Layout::array::<Frame>(managed_pages.len)
             .expect("Frame layout should not be too large");
@@ -132,12 +136,28 @@ impl PhysicalMemoryManager {
         let mut buddy =
             BuddySystem::new(frames.len(), boot_alloc).expect("Boot Allocator should not fail.");
 
-        let (free_blocks, _, _) = memblock_system.destroy();
+        memblock_system.freeze();
+        let free_blocks = memblock_system.free_blocks();
+        log!("Base: {:x}\n", base.addr().usize());
         for free_block in free_blocks {
-            for aligned in free_block.aligned_split(BUDDY_MAX_ORDER) {
-                let idx =
-                    aligned.base.addr_sub(managed_range.base) as usize / PageSize::Small.usize();
-                let order = aligned.base.usize().trailing_zeros() as u8;
+            log!(
+                "Splitting: {:x}, {}KB\n",
+                free_block.base.usize(),
+                free_block.size / KiB
+            );
+            for aligned in free_block.aligned_split(
+                FRAME_ORDER,
+                BUDDY_MAX_ORDER + FRAME_ORDER,
+            ) {
+                log!(
+                    "({:x}, {})\n",
+                    aligned.base.usize(),
+                    aligned.size
+                );
+                assert!(aligned.base.is_aligned_to(FRAME_SIZE));
+                let idx = (aligned.base - base.addr()) as usize / FRAME_SIZE;
+                let block_order = aligned.size.trailing_zeros() as u8;
+                let order = block_order - FRAME_ORDER;
 
                 // SAFETY: Initializing buddy
                 unsafe {
@@ -152,8 +172,6 @@ impl PhysicalMemoryManager {
         }
     }
 
-    fn frame_size(&self) -> PageSize { self.base.page_size() }
-
     fn frame(&self, addr: impl Into<Addr<LinearSpace>>) -> Option<&Frame> {
         self.frame_idx(addr.into()).map(|idx| &self.frames[idx])
     }
@@ -164,7 +182,7 @@ impl PhysicalMemoryManager {
 
     fn frame_idx(&self, addr: Addr<LinearSpace>) -> Option<usize> {
         let byte_offset: usize = (addr - self.base.addr()).try_into().ok()?;
-        let idx = byte_offset >> self.frame_size().order();
+        let idx = byte_offset >> FRAME_ORDER;
         (idx < self.frames.len()).then_some(idx)
     }
 
@@ -177,7 +195,7 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
         cnt: usize,
         page_size: PageSize,
     ) -> Option<PageRange<LinearSpace>> {
-        let frame_cnt = cnt * (page_size.usize() / self.frame_size().usize());
+        let frame_cnt = cnt * (page_size.usize() / FRAME_SIZE);
         let order = frame_cnt.next_power_of_two().ilog2() as u8;
         let frame_idx = self.buddy.reserve(order)?;
         self.frames[frame_idx].order = order;

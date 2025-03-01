@@ -13,9 +13,10 @@ panic = "abort"
 arrayvec = { version = "0.7.6", default-features = false }
 bitflags = "2.8.0"
 bitvec = { version = "1.0.1", default-features = false }
-derive_more = { version = "1.0.0", default-features = false, features = ["full"]}
+derive_more = { version = "1.0.0", default-features = false, features = [
+    "full",
+] }
 multiboot2 = { version = "0.23.0", default-features = false }
 nonmax = { version = "0.5.5", default-features = false }
+pinned-init = { version = "0.0.9", default-features = false, features = ["alloc"] }
 spin = "0.9.8"
-
-

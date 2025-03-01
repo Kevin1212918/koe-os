@@ -14,3 +14,10 @@ pub fn hlt() -> ! {
 
 pub mod array_forest;
 pub mod ll;
+
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        write!(VGA_BUFFER.lock(), $($arg)*).ok()
+    };
+}

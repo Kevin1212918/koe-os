@@ -1,3 +1,4 @@
+use core::fmt::Write as _;
 use core::ops::Deref;
 
 use addr::Addr;
@@ -13,6 +14,8 @@ mod phy;
 mod virt;
 
 pub use phy::LinearSpace;
+
+use crate::drivers::vga::VGA_BUFFER;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 

@@ -43,7 +43,7 @@ impl<S: AddrSpace> Sub for Addr<S> {
 
 impl<S: AddrSpace> Addr<S> {
     pub const fn new(value: usize) -> Self {
-        assert!(S::RANGE.start <= value && value < S::RANGE.end);
+        debug_assert!(S::RANGE.start <= value && value < S::RANGE.end);
 
         Self {
             value,
@@ -351,8 +351,8 @@ pub enum PageSize {
     Huge,
 }
 impl PageSize {
-    const MAX: Self = Self::Huge;
-    const MIN: Self = Self::Small;
+    pub const MAX: Self = Self::Huge;
+    pub const MIN: Self = Self::Small;
 
     pub const fn align(self) -> usize { self.usize() }
 
