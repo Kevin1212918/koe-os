@@ -78,40 +78,22 @@ impl BuddySystem {
         assert!(order <= self.max_order);
 
         let max_depth = self.map.max_depth();
-        let depth = max_depth - order as usize;
-        let idx = idx >> order;
+        let target_depth = max_depth - order as usize;
+        // let idx = idx >> order;
 
-        let mut stack: ArrayVec<_, { BUDDY_MAX_DEPTH as usize }> = ArrayVec::new();
-        let mut cursor_opt = Some(self.map.cursor_mut(depth, idx));
+        for depth in target_depth..=max_depth {
+            let order = max_depth - depth;
+            let block_cnt = 1 << (depth - target_depth);
 
-        while let Some(ref mut cursor) = cursor_opt {
-            *cursor.get_mut() = Buddy::free((max_depth - cursor.depth()) as u8);
-            stack.push((cursor.depth(), cursor.idx()));
-            if cursor.left() {
-                continue;
-            }
+            let start = idx >> order;
+            let end = start + block_cnt;
 
-            cursor_opt = stack.pop().map(|(depth, idx)| {
-                let mut cursor = self.map.cursor_mut(depth, idx);
-                cursor.right();
-                cursor
-            })
+            let blocks = self.map.slice_mut(depth);
+            blocks[start..end].fill(Buddy::free(order as u8));
         }
 
-        Self::fixup_map(&mut self.map.cursor_mut(depth, idx));
+        Self::fixup_map(&mut self.map.cursor_mut(target_depth, idx >> order));
     }
-
-    // /// Reserve a page.
-    // pub fn reserve(&mut self, order: u8) -> Option<Pfn> {
-    //     assert!(order <= self.max_order);
-    //     let idx = self.reserve_on_map(order)?;
-    //     // Mark Page struct
-    //     let pfn = Self::idx2pfn(pmm, idx, order);
-    //     let page = pmm.page_mut(pfn).expect("idx2pfn should return valid pfn.");
-    //     *page.order() = order;
-
-    //     Some(pfn)
-    // }
 
     /// Reserve a page on map. Returns the index of the reserved buddy on map.
     pub fn reserve(&mut self, order: u8) -> Option<usize> {
@@ -130,6 +112,7 @@ impl BuddySystem {
         if cursor_opt.is_none() {
             return None;
         }
+
 
         while let Some(ref mut cursor) = cursor_opt {
             if cursor.get().is_reserved() {
@@ -180,6 +163,8 @@ impl BuddySystem {
     const fn depth_to_order(&self, depth: usize) -> u8 { (self.map.max_depth() - depth) as u8 }
 
     const fn order_to_depth(&self, order: u8) -> usize { self.map.max_depth() - order as usize }
+
+    pub const fn max_order(&self) -> u8 { self.max_order }
 
     fn fixup_map(cursor: &mut Cursor<&mut ArrayForest<Buddy>, Buddy>) {
         while cursor.depth() != 0 {

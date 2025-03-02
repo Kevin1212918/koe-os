@@ -137,8 +137,6 @@ impl Memblocks {
         let mut merge_prev: Option<usize> = None;
         let mut merge_next: Option<usize> = None;
 
-        // FIXME: index out of bound in this function
-
         // We use wrapping_sub so that when pivot is 0, it is safely wrapped
         // to usize::MAX, which should not be a valid idx anyways.
         if let Some(prev) = self.data.get(pivot.wrapping_sub(1)) {
@@ -258,11 +256,6 @@ impl MemblockSystem {
         self.offset += layout.size();
 
         if self.offset > partial_block.size {
-            log!("{:#?}\n", layout);
-            log!("{}\n", partial_block.size);
-            log!("{}\n", self.offset);
-            hlt();
-
             self.reserved_blocks.insert(*partial_block);
             self.partial_block = self.free_blocks.pop();
             self.offset = 0;
@@ -323,12 +316,14 @@ impl Iterator for AlignedSplit {
             return None;
         }
         let offset_order = self.offset.trailing_zeros();
-        let diff_order = (self.memblock.size - self.offset).trailing_zeros();
+        let diff = self.memblock.size - self.offset;
+        let diff_order = usize::BITS - diff.leading_zeros() - 1;
+
         let next_order = offset_order.min(diff_order).min(self.max_order);
 
         let next_size = 1 << next_order;
         let next = Memblock {
-            base: self.memblock.base.byte_add(self.offset),
+            base: self.memblock.base + self.offset,
             size: next_size,
             typ: self.memblock.typ,
         };

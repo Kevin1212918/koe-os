@@ -138,22 +138,11 @@ impl PhysicalMemoryManager {
 
         memblock_system.freeze();
         let free_blocks = memblock_system.free_blocks();
-        log!("Base: {:x}\n", base.addr().usize());
         for free_block in free_blocks {
-            log!(
-                "Splitting: {:x}, {}KB\n",
-                free_block.base.usize(),
-                free_block.size / KiB
-            );
             for aligned in free_block.aligned_split(
                 FRAME_ORDER,
                 BUDDY_MAX_ORDER + FRAME_ORDER,
             ) {
-                log!(
-                    "({:x}, {})\n",
-                    aligned.base.usize(),
-                    aligned.size
-                );
                 assert!(aligned.base.is_aligned_to(FRAME_SIZE));
                 let idx = (aligned.base - base.addr()) as usize / FRAME_SIZE;
                 let block_order = aligned.size.trailing_zeros() as u8;
@@ -196,7 +185,12 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
         page_size: PageSize,
     ) -> Option<PageRange<LinearSpace>> {
         let frame_cnt = cnt * (page_size.usize() / FRAME_SIZE);
-        let order = frame_cnt.next_power_of_two().ilog2() as u8;
+        let allocate_cnt = frame_cnt.next_power_of_two();
+        let order = allocate_cnt.ilog2() as u8;
+        if order > self.buddy.max_order() {
+            return None;
+        }
+
         let frame_idx = self.buddy.reserve(order)?;
         self.frames[frame_idx].order = order;
 
@@ -204,7 +198,9 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
             .base
             .checked_page_add(frame_idx)
             .expect("index returned by buddy system should be correctly sized");
-        let len = frame_cnt.next_power_of_two();
+        let base = PageAddr::new(base.addr(), page_size);
+
+        let len = allocate_cnt >> (page_size.order() - FRAME_ORDER);
         Some(PageRange { base, len })
     }
 

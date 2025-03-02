@@ -1,4 +1,4 @@
-koe-os.iso: src/*
+koe-os.iso: $(wildcard src/**/*)
 	rm -rf iso
 	rm -f koe-os.iso
 
