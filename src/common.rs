@@ -13,7 +13,8 @@ pub fn hlt() -> ! {
 }
 
 pub mod array_forest;
-pub mod ll;
+// TODO: finish intrusive list.
+// pub mod ll;
 
 #[macro_export]
 macro_rules! log {

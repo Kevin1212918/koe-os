@@ -16,7 +16,6 @@ use super::addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRa
 use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
-use crate::common::ll::ListNode;
 use crate::common::{hlt, KiB, TiB};
 use crate::drivers::vga::VGA_BUFFER;
 use crate::log;

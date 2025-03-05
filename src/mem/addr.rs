@@ -1,6 +1,7 @@
+use core::alloc::Layout;
 use core::iter;
 use core::marker::PhantomData;
-use core::ops::{Add, Range, RangeBounds, Sub};
+use core::ops::{Add, DerefMut, Range, RangeBounds, Sub};
 
 use derive_more::derive::Into;
 
@@ -343,6 +344,19 @@ pub trait PageManager<S: AddrSpace> {
     /// `page` should be a page allocated by this allocator.
     unsafe fn deallocate_pages(&mut self, pages: PageRange<S>);
 }
+impl<S: AddrSpace, P, T> PageManager<S> for T
+where
+    P: PageManager<S>,
+    T: DerefMut<Target = P>,
+{
+    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>> {
+        self.deref_mut().allocate_pages(cnt, page_size)
+    }
+
+    unsafe fn deallocate_pages(&mut self, pages: PageRange<S>) {
+        unsafe { self.deref_mut().deallocate_pages(pages) }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PageSize {
@@ -353,6 +367,11 @@ pub enum PageSize {
 impl PageSize {
     pub const MAX: Self = Self::Huge;
     pub const MIN: Self = Self::Small;
+
+    pub fn layout(self) -> Layout {
+        Layout::from_size_align(self.usize(), self.align())
+            .expect("PageSize should specify a valid page layout.")
+    }
 
     pub const fn align(self) -> usize { self.usize() }
 

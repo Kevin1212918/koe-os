@@ -7,7 +7,8 @@
     impl_trait_in_assoc_type,
     sync_unsafe_cell,
     allocator_api,
-    strict_overflow_ops
+    strict_overflow_ops,
+    const_alloc_layout
 )]
 #![deny(unsafe_op_in_unsafe_fn)]
 
