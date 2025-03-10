@@ -89,4 +89,3 @@ impl<S: VirtSpace> Ord for VirtMemoryArea<S> {
         self.range.base.addr().cmp(&other.range.base.addr())
     }
 }
-

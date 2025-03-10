@@ -267,7 +267,10 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
             EntryTarget::None | EntryTarget::Page(..) => {
                 let table_paddr = alloc.allocate_pages(1, PageSize::Small).unwrap().base;
                 unsafe {
-                    self.cur_entry.reinit(table_paddr.into(), DEFAULT_PAGE_TABLE_FLAGS);
+                    self.cur_entry.reinit(
+                        table_paddr.into(),
+                        DEFAULT_PAGE_TABLE_FLAGS,
+                    );
                 }
             },
             EntryTarget::Table(..) => (),

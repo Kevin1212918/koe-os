@@ -1,53 +1,100 @@
+use alloc::alloc::Allocator;
+use alloc::boxed::Box;
 use core::cell::{Cell, UnsafeCell};
-use core::marker::PhantomPinned;
+use core::marker::{PhantomData, PhantomPinned};
 use core::pin::Pin;
-use core::ptr;
+use core::ptr::{self, NonNull};
 
+use intrusive_collections::{linked_list, Adapter, PointerOps};
 use pinned_init::{pin_data, pin_init_from_closure, pinned_drop, PinInit, PinnedDrop};
 
 /// A node that can be a part of an intrusive linked list.
-unsafe trait ListNode<const LINK_OFFSET: usize> {}
+pub unsafe trait Linked<const LINK_OFFSET: usize> {}
 
-struct Link(_Link);
+pub type Link = linked_list::Link;
 
-#[pin_data(PinnedDrop)]
-struct _Link {
-    prev: Cell<*mut _Link>,
-    next: Cell<*mut _Link>,
-    #[pin]
-    _pin: PhantomPinned,
+
+pub trait LinkPointer<const LINK_OFFSET: usize> {
+    type DefaultAdapter: Adapter;
 }
-impl _Link {
-    pub fn new() -> impl PinInit<Self, ()> {
-        unsafe {
-            pin_init_from_closure(|slot: *mut Self| {
-                (&raw mut (*slot).prev).write(Cell::new(slot));
-                (&raw mut (*slot).next).write(Cell::new(slot));
+impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone>
+    LinkPointer<LINK_OFFSET> for Box<T, A>
+{
+    type DefaultAdapter = BoxAdapter<LINK_OFFSET, T, A>;
+}
 
-                Ok(())
-            })
-        }
+pub type LinkedList<const LINK_OFFSET: usize, T>
+where
+    T: LinkPointer<LINK_OFFSET>,
+= linked_list::LinkedList<T::DefaultAdapter>;
+
+pub trait BoxLinkedListExt<A: Allocator + Clone> {
+    fn with_alloc(alloc: A) -> Self;
+}
+
+impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> BoxLinkedListExt<A>
+    for linked_list::LinkedList<BoxAdapter<LINK_OFFSET, T, A>>
+{
+    fn with_alloc(alloc: A) -> Self {
+        let adapter = BoxAdapter {
+            link_ops: linked_list::LinkOps,
+            pointer_ops: BoxPointerOps {
+                alloc,
+                _phantom: PhantomData,
+            },
+        };
+        Self::new(adapter)
+    }
+}
+
+pub struct BoxAdapter<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> {
+    link_ops: linked_list::LinkOps,
+    pointer_ops: BoxPointerOps<T, A>,
+}
+
+unsafe impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> Adapter
+    for BoxAdapter<LINK_OFFSET, T, A>
+{
+    type LinkOps = linked_list::LinkOps;
+    type PointerOps = BoxPointerOps<T, A>;
+
+    unsafe fn get_value(
+        &self,
+        link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
+    ) -> *const <Self::PointerOps as PointerOps>::Value {
+        // SAFETY: LINK_OFFSET should be the offset.
+        unsafe { link.byte_sub(LINK_OFFSET).as_ptr().cast_const().cast() }
     }
 
-    pub fn push_back(mut self: Pin<&mut Self>, mut link: Pin<&mut _Link>) {
-        // SAFETY: Converting ref to ptr does not move the referent.
-        let link_ptr = ptr::from_mut(unsafe { link.as_mut().get_unchecked_mut() });
-        let my_ptr = ptr::from_mut(unsafe { self.as_mut().get_unchecked_mut() });
-
-        link.prev.set(my_ptr);
-        link.next.set(self.next.get());
-
-        let next_ptr = self.next.get();
-        self.next.set(link_ptr);
+    unsafe fn get_link(
+        &self,
+        value: *const <Self::PointerOps as PointerOps>::Value,
+    ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        // SAFETY: LINK_OFFSET should be the offset.
+        unsafe { NonNull::new_unchecked(value.byte_add(LINK_OFFSET).cast_mut().cast()) }
     }
+
+    fn link_ops(&self) -> &Self::LinkOps { &self.link_ops }
+
+    fn link_ops_mut(&mut self) -> &mut Self::LinkOps { &mut self.link_ops }
+
+    fn pointer_ops(&self) -> &Self::PointerOps { &self.pointer_ops }
 }
 
-#[pinned_drop]
-impl PinnedDrop for _Link {
-    fn drop(self: Pin<&mut Self>) {}
+pub struct BoxPointerOps<T, A: Allocator + Clone> {
+    alloc: A,
+    _phantom: PhantomData<Box<T, A>>,
 }
-/// An intrusive linked list.
-struct LinkedList<const LINK_OFFSET: usize> {
-    link: _Link,
+
+unsafe impl<T, A: Allocator + Clone> PointerOps for BoxPointerOps<T, A> {
+    type Pointer = Box<T, A>;
+    type Value = T;
+
+    #[inline]
+    unsafe fn from_raw(&self, raw: *const T) -> Box<T, A> {
+        unsafe { Box::from_raw_in(raw as *mut T, self.alloc.clone()) }
+    }
+
+    #[inline]
+    fn into_raw(&self, ptr: Box<T, A>) -> *const T { Box::into_raw(ptr) as *const T }
 }
-impl<const LINK_OFFSET: usize> LinkedList<LINK_OFFSET> {}
