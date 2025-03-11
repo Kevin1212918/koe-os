@@ -11,7 +11,7 @@ use table::{RawTable, TableRef};
 
 use super::addr::{Addr, PageAddr, PageManager, PageSize};
 use super::virt::{RecursivePagingSpace, VirtSpace};
-use super::LinearSpace;
+use super::UMASpace;
 use crate::mem::addr::AddrSpace;
 use crate::mem::virt::KernelSpace;
 use crate::mem::{kernel_end_vma, kernel_size};
@@ -39,9 +39,9 @@ pub trait MemoryManager {
     unsafe fn map<V: VirtSpace, const N: usize>(
         &self,
         vpage: PageAddr<V>,
-        ppage: PageAddr<LinearSpace>,
+        ppage: PageAddr<UMASpace>,
         flags: [Flag; N],
-        allocator: &mut impl PageManager<LinearSpace>,
+        allocator: &mut impl PageManager<UMASpace>,
     ) -> Option<()>;
 
     /// Removes mapping at `vaddr`.
@@ -57,7 +57,7 @@ pub trait MemoryManager {
 
     /// Try translating a virtual address into a physical address. Fails iff
     /// the virtual address is not mapped.
-    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>>;
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<UMASpace>>;
 }
 
 //---------------------------- x86-64 stuff below ---------------------------//
@@ -187,9 +187,9 @@ impl MemoryManager for X86_64MemoryManager {
     unsafe fn map<V: VirtSpace, const N: usize>(
         &self,
         vpage: PageAddr<V>,
-        ppage: PageAddr<LinearSpace>,
+        ppage: PageAddr<UMASpace>,
         flags: [Flag; N],
-        allocator: &mut impl PageManager<LinearSpace>,
+        allocator: &mut impl PageManager<UMASpace>,
     ) -> Option<()> {
         debug_assert!(vpage.page_size() == ppage.page_size());
 
@@ -214,7 +214,7 @@ impl MemoryManager for X86_64MemoryManager {
 
     /// Try translating a virtual address into a physical address. Fails iff
     /// the virtual address is not mapped.
-    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<LinearSpace>> {
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<UMASpace>> {
         let mut page_structure = self.0.lock();
         let mut walker = unsafe { Walker::new(&mut page_structure, vaddr) };
 
@@ -257,7 +257,7 @@ impl<'a, T: VirtSpace> Walker<'a, T> {
             .map(|_| unsafe { self.down_unchecked() })
     }
 
-    fn down(&mut self, alloc: &mut impl PageManager<LinearSpace>) -> &mut EntryRef<'a> {
+    fn down(&mut self, alloc: &mut impl PageManager<UMASpace>) -> &mut EntryRef<'a> {
         if self.cur_entry.level().next_level().is_none() {
             return self.cur();
         }
@@ -486,6 +486,6 @@ impl Level {
 /// which fits the page table, and both functions follow the usual requirements
 /// specified in [`alloc::alloc::Allocator`].
 pub unsafe trait PageTableAllocator {
-    fn allocate(&self) -> Addr<LinearSpace>;
-    fn deallocate(&self, addr: Addr<LinearSpace>);
+    fn allocate(&self) -> Addr<UMASpace>;
+    fn deallocate(&self, addr: Addr<UMASpace>);
 }

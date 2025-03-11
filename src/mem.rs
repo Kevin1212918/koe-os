@@ -10,7 +10,7 @@ mod phy;
 mod virt;
 
 pub use addr::PageSize;
-pub use phy::LinearSpace;
+pub use phy::UMASpace;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
@@ -43,14 +43,14 @@ pub fn kernel_end_vma() -> Addr<KernelSpace> {
     Addr::from_ref(unsafe { &_KERNEL_END_VMA })
 }
 #[inline]
-pub fn kernel_start_lma() -> Addr<LinearSpace> {
+pub fn kernel_start_lma() -> Addr<UMASpace> {
     // SAFETY: _KERNEL_START_LMA is on symbol table created by linker. The
     // address of the symbol is the load memory address of kernel, which
     // should be loaded during real mode at the actual physical address
     unsafe { Addr::new(&_KERNEL_START_LMA as *const u8 as usize) }
 }
 #[inline]
-pub fn kernel_end_lma() -> Addr<LinearSpace> { kernel_start_lma().byte_add(kernel_size()) }
+pub fn kernel_end_lma() -> Addr<UMASpace> { kernel_start_lma().byte_add(kernel_size()) }
 #[inline]
 pub fn kernel_size() -> usize {
     kernel_end_vma()
@@ -58,10 +58,10 @@ pub fn kernel_size() -> usize {
         .try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
-pub unsafe fn kernel_v2p(addr: Addr<KernelSpace>) -> Addr<LinearSpace> {
+pub unsafe fn kernel_v2p(addr: Addr<KernelSpace>) -> Addr<UMASpace> {
     Addr::new(addr.usize() - KERNEL_OFFSET_VMA)
 }
-pub fn p2v(addr: Addr<LinearSpace>) -> Addr<PhysicalRemapSpace> {
+pub fn p2v(addr: Addr<UMASpace>) -> Addr<PhysicalRemapSpace> {
     let vaddr = addr.byte_add(PhysicalRemapSpace::OFFSET).usize();
     Addr::new(vaddr)
 }

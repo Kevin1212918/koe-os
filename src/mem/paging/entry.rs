@@ -5,7 +5,7 @@ use derive_more::derive::{From, Into};
 use super::Level;
 use crate::common::{GiB, KiB, MiB};
 use crate::mem::addr::Addr;
-use crate::mem::LinearSpace;
+use crate::mem::UMASpace;
 
 
 /// A raw paging table entry without type info.
@@ -75,7 +75,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub unsafe fn set_addr(&mut self, addr: Addr<LinearSpace>) -> bool {
+    pub unsafe fn set_addr(&mut self, addr: Addr<UMASpace>) -> bool {
         use EntryTarget::*;
         use Level::*;
 
@@ -171,7 +171,7 @@ impl<'a> EntryRef<'a> {
     pub unsafe fn init<const N: usize>(
         raw: &'a mut RawEntry,
         level: Level,
-        addr: Addr<LinearSpace>,
+        addr: Addr<UMASpace>,
         flags: [Flag; N],
     ) -> Option<Self> {
         let mut new = unsafe { Self::from_raw(raw, level) };
@@ -186,7 +186,7 @@ impl<'a> EntryRef<'a> {
     /// of `typ` and `flags`
     pub unsafe fn reinit<const N: usize>(
         &mut self,
-        addr: Addr<LinearSpace>,
+        addr: Addr<UMASpace>,
         flags: [Flag; N],
     ) -> Option<()> {
         let present_bit = flags
@@ -216,8 +216,8 @@ impl<'a> EntryRef<'a> {
 /// Reference target of a paging table entry
 pub enum EntryTarget {
     None,
-    Table(Level, Addr<LinearSpace>),
-    Page(Level, Addr<LinearSpace>),
+    Table(Level, Addr<UMASpace>),
+    Page(Level, Addr<UMASpace>),
 }
 
 /// A flag in a page entry. Currently supports `Present`, `ReadWrite`,

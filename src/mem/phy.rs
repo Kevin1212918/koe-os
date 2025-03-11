@@ -3,7 +3,7 @@ use core::alloc::Layout;
 use core::fmt::Write as _;
 use core::ops::Range;
 use core::pin::Pin;
-use core::ptr::{NonNull};
+use core::ptr::NonNull;
 use core::usize;
 
 use buddy::{BuddySystem, BUDDY_MAX_ORDER};
@@ -62,9 +62,9 @@ fn init_remap(memblock: &mut MemblockSystem) {
 
 pub trait PhySpace: AddrSpace {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LinearSpace;
-impl PhySpace for LinearSpace {}
-impl AddrSpace for LinearSpace {
+pub struct UMASpace;
+impl PhySpace for UMASpace {}
+impl AddrSpace for UMASpace {
     const RANGE: Range<usize> = {
         let start = 0;
         let end = 64 * TiB;
@@ -100,11 +100,11 @@ pub const FRAME_SIZE: usize = PageSize::MIN.usize();
 
 pub struct PhysicalMemoryManager {
     frames: &'static mut [Frame],
-    base: PageAddr<LinearSpace>,
+    base: PageAddr<UMASpace>,
     buddy: BuddySystem,
 }
 impl PhysicalMemoryManager {
-    /// Create a [`PhysicalMemoryManager`] for [`LinearSpace`]
+    /// Create a [`PhysicalMemoryManager`] for [`UMASpace`]
     ///
     /// Since `PhysicalMemoryManager` does not track its own memory,
     /// its backing memory is leaked.
@@ -112,7 +112,7 @@ impl PhysicalMemoryManager {
     /// # Safety
     /// PhysicalRemapSpace should be mapped.
     unsafe fn new(
-        managed_range: AddrRange<LinearSpace>,
+        managed_range: AddrRange<UMASpace>,
         memblock_system: &mut MemblockSystem,
     ) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
@@ -156,15 +156,15 @@ impl PhysicalMemoryManager {
         }
     }
 
-    fn frame(&self, addr: impl Into<Addr<LinearSpace>>) -> Option<&Frame> {
+    fn frame(&self, addr: impl Into<Addr<UMASpace>>) -> Option<&Frame> {
         self.frame_idx(addr.into()).map(|idx| &self.frames[idx])
     }
 
-    fn frame_mut(&mut self, addr: impl Into<Addr<LinearSpace>>) -> Option<&mut Frame> {
+    fn frame_mut(&mut self, addr: impl Into<Addr<UMASpace>>) -> Option<&mut Frame> {
         self.frame_idx(addr.into()).map(|idx| &mut self.frames[idx])
     }
 
-    fn frame_idx(&self, addr: Addr<LinearSpace>) -> Option<usize> {
+    fn frame_idx(&self, addr: Addr<UMASpace>) -> Option<usize> {
         let byte_offset: usize = (addr - self.base.addr()).try_into().ok()?;
         let idx = byte_offset >> FRAME_ORDER;
         (idx < self.frames.len()).then_some(idx)
@@ -173,12 +173,8 @@ impl PhysicalMemoryManager {
     const fn frames_ptr(&self) -> *const Frame { &raw const self.frames[0] }
 }
 
-impl PageManager<LinearSpace> for PhysicalMemoryManager {
-    fn allocate_pages(
-        &mut self,
-        cnt: usize,
-        page_size: PageSize,
-    ) -> Option<PageRange<LinearSpace>> {
+impl PageManager<UMASpace> for PhysicalMemoryManager {
+    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
         let frame_cnt = cnt * (page_size.usize() / FRAME_SIZE);
         let allocate_cnt = frame_cnt.next_power_of_two();
         let order = allocate_cnt.ilog2() as u8;
@@ -199,7 +195,7 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
         Some(PageRange { base, len })
     }
 
-    unsafe fn deallocate_pages(&mut self, pages: PageRange<LinearSpace>) {
+    unsafe fn deallocate_pages(&mut self, pages: PageRange<UMASpace>) {
         let frame_idx = self
             .frame_idx(pages.base.into())
             .expect("pages should be valid when deallocating");
@@ -221,7 +217,7 @@ impl PageManager<LinearSpace> for PhysicalMemoryManager {
 /// Note this only considers the memory usage before `kmain` is called.
 fn initial_free_memory_areas<'boot>(
     boot_info: &'boot BootInformation,
-) -> impl Iterator<Item = AddrRange<LinearSpace>> + 'boot {
+) -> impl Iterator<Item = AddrRange<UMASpace>> + 'boot {
     let mbi_range = {
         let start = Addr::new(boot_info.start_address());
         let end = Addr::new(boot_info.end_address());
@@ -233,7 +229,7 @@ fn initial_free_memory_areas<'boot>(
         .memory_areas();
 
     let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
-    let kernel_area: AddrRange<LinearSpace> = (kernel_start_lma()..kernel_end_lma()).into();
+    let kernel_area: AddrRange<UMASpace> = (kernel_start_lma()..kernel_end_lma()).into();
     memory_areas
         .iter()
         .filter(move |area| area.typ() == available)
@@ -249,7 +245,7 @@ fn initial_free_memory_areas<'boot>(
 }
 
 /// Find the initial range of available physical memory
-fn initial_memory_range(boot_info: &BootInformation) -> Range<Addr<LinearSpace>> {
+fn initial_memory_range(boot_info: &BootInformation) -> Range<Addr<UMASpace>> {
     let memory_areas = boot_info
         .memory_map_tag()
         .expect("BootInformation should include memory map")

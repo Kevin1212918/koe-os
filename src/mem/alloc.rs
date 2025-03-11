@@ -6,7 +6,7 @@ use slab::SlabAllocator;
 use super::addr::{PageManager, PageSize};
 use super::paging::{Flag, MemoryManager};
 use super::virt::VirtSpace;
-use super::LinearSpace;
+use super::UMASpace;
 
 mod page;
 mod slab;

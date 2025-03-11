@@ -12,7 +12,7 @@ use core::ops::Range;
 use core::sync::atomic::AtomicUsize;
 
 use super::addr::{Addr, AddrSpace, PageRange};
-use super::LinearSpace;
+use super::UMASpace;
 use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {}
@@ -34,7 +34,7 @@ impl AddrSpace for KernelHeapSpace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelSpace;
 impl KernelSpace {
-    pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::LinearSpace> {
+    pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::UMASpace> {
         assert!(Self::RANGE.contains(&vaddr.usize()));
         Addr::new(vaddr.usize() - Self::RANGE.start)
     }
@@ -49,11 +49,11 @@ pub struct PhysicalRemapSpace;
 impl PhysicalRemapSpace {
     pub const OFFSET: usize = Self::RANGE.start;
 
-    pub const fn p2v(paddr: Addr<LinearSpace>) -> Addr<Self> {
+    pub const fn p2v(paddr: Addr<UMASpace>) -> Addr<Self> {
         Addr::new(paddr.usize() + Self::OFFSET)
     }
 
-    pub const fn v2p(vaddr: Addr<Self>) -> Addr<LinearSpace> {
+    pub const fn v2p(vaddr: Addr<Self>) -> Addr<UMASpace> {
         Addr::new(vaddr.usize() - Self::OFFSET)
     }
 }

@@ -14,7 +14,7 @@ use multiboot2::{MemoryArea, MemoryAreaType};
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
-use crate::mem::{kernel_end_lma, LinearSpace};
+use crate::mem::{kernel_end_lma, UMASpace};
 
 pub fn init(memory_areas: &[MemoryArea]) -> Pin<&mut MemblockSystem> {
     // SAFETY: BMM is not accessed elsewhere in the module, and init is called
@@ -33,7 +33,7 @@ enum MemTyp {
 /// is considered greater than not present `Memblock`
 #[derive(Debug, Clone, Copy)]
 pub struct Memblock {
-    pub base: Addr<LinearSpace>,
+    pub base: Addr<UMASpace>,
     pub size: usize,
     typ: MemTyp,
 }
@@ -167,7 +167,7 @@ impl Memblocks {
         true
     }
 
-    fn remove(&mut self, base: Addr<LinearSpace>) -> Option<Memblock> {
+    fn remove(&mut self, base: Addr<UMASpace>) -> Option<Memblock> {
         let idx = self.data.binary_search_by_key(&base, |b| b.base).ok()?;
 
         Some(self.data.remove(idx))
@@ -187,7 +187,7 @@ pub struct MemblockSystem {
     reserved_blocks: Memblocks,
     partial_block: Option<Memblock>,
     offset: usize,
-    managed_range: AddrRange<LinearSpace>,
+    managed_range: AddrRange<UMASpace>,
 }
 impl MemblockSystem {
     pub fn init_pinned<'s, 'm, T>(
@@ -203,8 +203,8 @@ impl MemblockSystem {
         // SAFETY: Initializing reserved_blocks
         unsafe { (&raw mut ((*tbi).reserved_blocks)).write(Memblocks::new()) };
 
-        let mut min_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.end - 1);
-        let mut max_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.start);
+        let mut min_addr: Addr<UMASpace> = Addr::new(UMASpace::RANGE.end - 1);
+        let mut max_addr: Addr<UMASpace> = Addr::new(UMASpace::RANGE.start);
 
         for mut block in memory.iter().map(|x| Memblock::from(x)) {
             // Skip the block if it is reserved.
@@ -263,7 +263,7 @@ impl MemblockSystem {
         unsafe { slot.map_unchecked_mut(|tbi| tbi.assume_init_mut()) }
     }
 
-    pub fn reserve(&mut self, layout: Layout) -> Option<Addr<LinearSpace>> {
+    pub fn reserve(&mut self, layout: Layout) -> Option<Addr<UMASpace>> {
         let partial_block = &mut self.partial_block?;
         self.offset = self.offset.next_multiple_of(layout.align());
         let base = self.offset;
@@ -308,7 +308,7 @@ impl MemblockSystem {
         });
     }
 
-    pub fn managed_range(&self) -> AddrRange<LinearSpace> { self.managed_range.clone() }
+    pub fn managed_range(&self) -> AddrRange<UMASpace> { self.managed_range.clone() }
 
     pub fn free_blocks(&self) -> &Memblocks { &self.free_blocks }
 
@@ -350,12 +350,8 @@ impl Iterator for AlignedSplit {
 
 //------------------- arch ------------------------
 
-impl PageManager<LinearSpace> for MemblockSystem {
-    fn allocate_pages(
-        &mut self,
-        cnt: usize,
-        page_size: PageSize,
-    ) -> Option<PageRange<LinearSpace>> {
+impl PageManager<UMASpace> for MemblockSystem {
+    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
         let layout = Layout::from_size_align(
             cnt * page_size.usize(),
             page_size.align(),
@@ -368,7 +364,7 @@ impl PageManager<LinearSpace> for MemblockSystem {
         })
     }
 
-    unsafe fn deallocate_pages(&mut self, _pages: PageRange<LinearSpace>) {
+    unsafe fn deallocate_pages(&mut self, _pages: PageRange<UMASpace>) {
         unimplemented!("MemblockAllocator cannot deallocate");
     }
 }
@@ -393,7 +389,7 @@ impl<'b> MemblockAllocator<'b> {
         }
     }
 
-    pub fn managed_range(&self) -> AddrRange<LinearSpace> {
+    pub fn managed_range(&self) -> AddrRange<UMASpace> {
         self.memblock.lock().managed_range.clone()
     }
 }
