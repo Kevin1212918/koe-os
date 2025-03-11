@@ -1,12 +1,9 @@
 use alloc::alloc::Allocator;
 use alloc::boxed::Box;
-use core::cell::{Cell, UnsafeCell};
-use core::marker::{PhantomData, PhantomPinned};
-use core::pin::Pin;
-use core::ptr::{self, NonNull};
+use core::marker::PhantomData;
+use core::ptr::{NonNull};
 
 use intrusive_collections::{linked_list, Adapter, PointerOps};
-use pinned_init::{pin_data, pin_init_from_closure, pinned_drop, PinInit, PinnedDrop};
 
 /// A node that can be a part of an intrusive linked list.
 pub unsafe trait Linked<const LINK_OFFSET: usize> {}

@@ -3,7 +3,6 @@ use core::alloc::Layout;
 use core::cell::SyncUnsafeCell;
 use core::fmt::Write as _;
 use core::mem::MaybeUninit;
-use core::ops::{Add, Range};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
@@ -12,9 +11,6 @@ use arrayvec::ArrayVec;
 use derive_more::derive::IntoIterator;
 use multiboot2::{MemoryArea, MemoryAreaType};
 
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;

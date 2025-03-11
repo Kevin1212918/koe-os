@@ -1,72 +1,20 @@
-use alloc::boxed::Box;
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
-use core::fmt::Write as _;
-use core::iter::empty;
-use core::marker::PhantomData;
-use core::mem::{offset_of, MaybeUninit};
-use core::ops::Div;
-use core::ptr::{self, slice_from_raw_parts, NonNull};
-use core::slice;
-use core::sync::atomic::{AtomicU8, AtomicUsize};
+use core::ptr::{self, NonNull};
 
-use bitvec::order::Lsb0;
-use bitvec::slice::BitSlice;
-use bitvec::view::BitView;
-use intrusive_collections::{
-    intrusive_adapter, DefaultPointerOps, LinkedList, PointerOps, UnsafeRef,
-};
-use page::PageAllocator;
-use slab::{Cache, SlabAllocator, UntypedCache};
+use slab::SlabAllocator;
 
-use super::addr::{Addr, PageManager, PageSize};
+use super::addr::{PageManager, PageSize};
 use super::paging::{Flag, MemoryManager};
-use super::phy::PhysicalMemoryManager;
 use super::virt::VirtSpace;
 use super::LinearSpace;
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
-use crate::mem::addr::{AddrRange, AddrSpace, PageRange};
-use crate::mem::paging::MMU;
-use crate::mem::phy::PMM;
-use crate::mem::virt::PhysicalRemapSpace;
 
 mod page;
 mod slab;
 
-fn allocate_pages<V: VirtSpace>(
-    mmu: &impl MemoryManager,
-    vmm: &mut impl PageManager<V>,
-    pmm: &mut impl PageManager<LinearSpace>,
+pub use page::PageAllocator;
 
-    cnt: usize,
-    page_size: PageSize,
-) -> Result<NonNull<[u8]>, AllocError> {
-    let vbase = vmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
-    let pbase = pmm.allocate_pages(cnt, page_size).ok_or(AllocError)?;
-
-    let ptr = NonNull::new(vbase.base.addr().into_ptr())
-        .expect("successfull virtual page allocation should not return null address");
-
-    debug_assert!(vbase.len == cnt);
-    debug_assert!(pbase.len == cnt);
-
-    let flags = [Flag::Present, Flag::ReadWrite];
-
-    for (vpage, ppage) in Iterator::zip(vbase.into_iter(), pbase.into_iter()) {
-        unsafe {
-            mmu.map(vpage, ppage, flags, pmm).expect("TODO: cleanup");
-        }
-    }
-
-    Ok(NonNull::slice_from_raw_parts(
-        ptr,
-        page_size.usize(),
-    ))
-}
-
-#[global_allocator]
-static GLOBAL_ALLOC: GlobalAllocator = GlobalAllocator;
+/// The global allocator.
+#[derive(Debug, Clone, Copy)]
 pub struct GlobalAllocator;
 unsafe impl Allocator for GlobalAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -100,6 +48,7 @@ unsafe impl GlobalAlloc for GlobalAllocator {
     }
 }
 
+/// Allocates if layout is zero-sized, otherwise returns None.
 fn allocate_if_zst(layout: Layout) -> Option<NonNull<[u8]>> {
     if layout.size() != 0 {
         return None;
@@ -110,6 +59,10 @@ fn allocate_if_zst(layout: Layout) -> Option<NonNull<[u8]>> {
     ))
 }
 
+/// Deallocates if layout is zero-sized, otherwise returns false.
 fn deallocate_if_zst(ptr: NonNull<u8>, layout: Layout) -> bool {
     layout.size() == 0 && ptr == NonNull::dangling()
 }
+
+#[global_allocator]
+static GLOBAL_ALLOC: GlobalAllocator = GlobalAllocator;

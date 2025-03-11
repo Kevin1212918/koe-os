@@ -1,24 +1,20 @@
 use alloc::alloc::Allocator;
 use core::alloc::Layout;
 use core::fmt::Write as _;
-use core::ops::{Deref, Range};
+use core::ops::Range;
 use core::pin::Pin;
-use core::ptr::{self, slice_from_raw_parts_mut, NonNull};
+use core::ptr::{NonNull};
 use core::usize;
 
-use arrayvec::ArrayVec;
 use buddy::{BuddySystem, BUDDY_MAX_ORDER};
-use memblock::{MemblockAllocator, MemblockSystem, Memblocks};
+use memblock::{MemblockAllocator, MemblockSystem};
 use multiboot2::{BootInformation, MemoryArea, MemoryAreaTypeId};
-use nonmax::NonMaxUsize;
 
-use super::addr::{Addr, AddrRange as _, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
-use crate::common::{hlt, KiB, TiB};
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
+use crate::common::TiB;
 use crate::mem::addr::AddrRange;
 use crate::mem::{kernel_end_lma, paging};
 

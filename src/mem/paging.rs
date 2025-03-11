@@ -12,11 +12,9 @@ use table::{RawTable, TableRef};
 use super::addr::{Addr, PageAddr, PageManager, PageSize};
 use super::virt::{RecursivePagingSpace, VirtSpace};
 use super::LinearSpace;
-use crate::log;
 use crate::mem::addr::AddrSpace;
 use crate::mem::virt::KernelSpace;
 use crate::mem::{kernel_end_vma, kernel_size};
-use crate::drivers::vga::VGA_BUFFER;
 
 mod entry;
 mod table;
@@ -193,7 +191,7 @@ impl MemoryManager for X86_64MemoryManager {
         flags: [Flag; N],
         allocator: &mut impl PageManager<LinearSpace>,
     ) -> Option<()> {
-        debug_assert!(vpage.size() == ppage.size());
+        debug_assert!(vpage.page_size() == ppage.page_size());
 
         let mut page_structure = self.0.lock();
         let mut walker = unsafe { Walker::new(&mut page_structure, vpage.start()) };

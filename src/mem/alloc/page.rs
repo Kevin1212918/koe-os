@@ -4,16 +4,16 @@ use core::fmt::Write as _;
 use core::ops::Div as _;
 use core::ptr::NonNull;
 
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageManager, PageRange, PageSize};
 use crate::mem::alloc::{allocate_if_zst, deallocate_if_zst};
-use crate::mem::paging::{Flag, MemoryManager, MMU};
 use crate::mem::phy::PMM;
 use crate::mem::virt::PhysicalRemapSpace;
 
 // TODO: Auto huge page
+
+/// A page allocator that will only allocate to the nearest page bound.
+///
+/// For now, this will only allocate [`PageSize::MIN`] page.
 #[derive(Debug, Clone, Copy)]
 pub struct PageAllocator;
 unsafe impl Allocator for PageAllocator {

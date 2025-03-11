@@ -1,28 +1,22 @@
-use alloc::alloc::{AllocError, Allocator, Global};
+use alloc::alloc::{AllocError, Allocator};
 use alloc::boxed::Box;
-use core::alloc::{GlobalAlloc, Layout};
-use core::any::type_name;
+use core::alloc::Layout;
 use core::cell::UnsafeCell;
-use core::fmt::Write as _;
 use core::marker::PhantomData;
 use core::mem::{offset_of, transmute, MaybeUninit};
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicUsize;
 use core::{array, slice};
 
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::view::BitView;
 use pinned_init::{
-    init, init_from_closure, pin_data, pin_init, pin_init_array_from_fn, InPlaceInit, Init, PinInit,
+    init, init_from_closure, pin_data, Init,
 };
 
 use super::page::PageAllocator;
 use super::{allocate_if_zst, deallocate_if_zst};
-use crate::common::hlt;
-use crate::common::ll::{self, BoxLinkedListExt as _, Link, LinkedList};
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
+use crate::common::ll::{self, BoxLinkedListExt as _, LinkedList};
 use crate::mem::addr::PageSize;
 
 pub struct SlabAllocator;

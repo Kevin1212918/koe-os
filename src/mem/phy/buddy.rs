@@ -1,17 +1,10 @@
 // TODO: refactor depth, order, and idx
 
 use alloc::alloc::{AllocError, Allocator};
-use core::fmt::Write as _;
 
 use arrayvec::ArrayVec;
-use nonmax::NonMaxUsize;
 
-use super::memblock::MemblockAllocator;
-use super::PhysicalMemoryManager;
 use crate::common::array_forest::{ArrayForest, Cursor};
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
 use crate::mem::addr::PageSize;
 use crate::mem::paging::MemoryManager;
 

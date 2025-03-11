@@ -24,6 +24,7 @@ mod common;
 mod drivers;
 mod mem;
 mod panic;
+mod test;
 
 #[no_mangle]
 pub extern "C" fn kmain(mbi_ptr: u32) -> ! {

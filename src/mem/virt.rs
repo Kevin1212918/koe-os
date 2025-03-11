@@ -8,13 +8,11 @@
 //! |0xFFFFFE8000000000:0xFFFFFF0000000000|Recursive Paging           | 0.5TB |
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
-use alloc::collections::btree_set::BTreeSet;
 use core::ops::Range;
 use core::sync::atomic::AtomicUsize;
 
-use super::addr::{Addr, AddrSpace, PageRange, PageSize};
+use super::addr::{Addr, AddrSpace, PageRange};
 use super::LinearSpace;
-use crate::mem::addr::AddrRange;
 use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {}

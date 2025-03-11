@@ -1,14 +1,19 @@
 use core::alloc::Layout;
-use core::iter;
 use core::marker::PhantomData;
-use core::ops::{Add, DerefMut, Range, RangeBounds, Sub};
+use core::ops::{Add, DerefMut, Range, Sub};
 
 use derive_more::derive::Into;
 
 use super::virt::VirtSpace;
 use crate::common::{GiB, KiB, MiB};
 
+/// An address space with constant evaluated address bounds. All addresses are
+/// within an address space, and addresses derived from address operations will
+/// remain within the address space.
+///
+/// The address space must be [`PageSize::MAX`] aligned.
 pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord {
+    /// The range of valid addresses.
     const RANGE: Range<usize>;
     /// Unit const for assertion.
     const _ASSERT_RANGE_IS_PAGE_ALIGNED: () = assert_range_is_page_aligned::<Self>();
@@ -18,6 +23,7 @@ const fn assert_range_is_page_aligned<S: AddrSpace>() {
     assert!(S::RANGE.end % PageSize::MAX.align() == 0);
 }
 
+/// An address within the [`AddrSpace`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Addr<S: AddrSpace> {
@@ -43,6 +49,10 @@ impl<S: AddrSpace> Sub for Addr<S> {
 }
 
 impl<S: AddrSpace> Addr<S> {
+    /// Creates a new address in the address space from `value`.
+    ///
+    /// # Undefined Behavior
+    /// The resulting address should be within the address space.
     pub const fn new(value: usize) -> Self {
         debug_assert!(S::RANGE.start <= value && value < S::RANGE.end);
 
@@ -52,8 +62,13 @@ impl<S: AddrSpace> Addr<S> {
         }
     }
 
+    /// Converts the address into a `usize`.
     pub const fn usize(self) -> usize { self.value }
 
+    /// Add `x` bytes to the address.
+    ///
+    /// # Undefined Behavior
+    /// The resulting address should not overflow the address space.
     pub const fn byte_add(mut self, x: usize) -> Self {
         debug_assert!(S::RANGE.start <= self.value + x);
 
@@ -61,6 +76,8 @@ impl<S: AddrSpace> Addr<S> {
         self
     }
 
+    /// Add `x` bytes to the address. Returns `None` if the resulting address
+    /// overflows the address space.
     pub fn checked_byte_add(mut self, x: usize) -> Option<Self> {
         self.value
             .checked_add(x)
@@ -71,6 +88,10 @@ impl<S: AddrSpace> Addr<S> {
             })
     }
 
+    /// Subtract `x` bytes to the address.
+    ///
+    /// # Undefined Behavior
+    /// The resulting address should not underflow the address space.
     pub const fn byte_sub(mut self, x: usize) -> Self {
         debug_assert!(self.value - x < S::RANGE.end);
 
@@ -78,6 +99,8 @@ impl<S: AddrSpace> Addr<S> {
         self
     }
 
+    /// Subtract `x` bytes to the address. Returns `None` if the resulting
+    /// address underflows the address space.
     pub fn checked_byte_sub(mut self, x: usize) -> Option<Self> {
         self.value
             .checked_sub(x)
@@ -88,6 +111,7 @@ impl<S: AddrSpace> Addr<S> {
             })
     }
 
+    /// Returns the signed byte difference between two addresses.
     pub const fn addr_sub(self, x: Self) -> isize { self.value as isize - x.value as isize }
 
     /// Returns an aligned address by rounding above. None if no aligned address
@@ -140,6 +164,7 @@ impl<S: VirtSpace> Addr<S> {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// An address range in the [`AddrSpace`].
 pub struct AddrRange<S: AddrSpace> {
     pub base: Addr<S>,
     pub size: usize,
@@ -152,18 +177,25 @@ impl<S: AddrSpace> From<Range<Addr<S>>> for AddrRange<S> {
     }
 }
 impl<S: AddrSpace> AddrRange<S> {
+    /// Creates a new address range from base address and range size.
+    ///
+    /// # Undefined Behavior
+    /// The address range should be fully contained within the address space.
     pub const fn new(base: Addr<S>, size: usize) -> Self {
-        debug_assert!(S::RANGE.end - (base.usize() + size) >= 0);
-
+        debug_assert!(S::RANGE.end >= base.usize() + size);
         Self { base, size }
     }
 
+    /// Returns start of the address range.
     pub const fn start(&self) -> Addr<S> { self.base }
 
+    /// Returns end of the address range.
     pub const fn end(&self) -> Addr<S> { self.base.byte_add(self.size) }
 
+    /// Check if the address range is empty.
     pub const fn is_empty(&self) -> bool { self.size == 0 }
 
+    /// Returns an empty range.
     pub const fn empty() -> Self {
         Self {
             base: Addr::new(S::RANGE.start),
@@ -172,6 +204,9 @@ impl<S: AddrSpace> AddrRange<S> {
     }
 
     /// Returns the set subtraction of `rhs` from `self`.
+    ///
+    /// In order to handle the resulting disjoint ranges, two address ranges
+    /// are returned. The returned ranges may be empty.
     pub fn range_sub(&self, rhs: Self) -> [Self; 2] {
         if self.is_empty() {
             return [Self::empty(), rhs];
@@ -214,6 +249,7 @@ impl<S: AddrSpace> AddrRange<S> {
         }
     }
 
+    /// Returns the range of overlapped pages.
     pub fn overlapped_pages(&self, page_size: PageSize) -> PageRange<S> {
         let base = self
             .base
@@ -227,7 +263,7 @@ impl<S: AddrSpace> AddrRange<S> {
         }
     }
 }
-/// A page consists a page aligned address and a page size
+/// A page aligned address.
 #[derive(Debug, Clone, Copy, Into)]
 pub struct PageAddr<S: AddrSpace> {
     #[into]
@@ -245,18 +281,18 @@ impl<S: AddrSpace> PageAddr<S> {
         Self { base, page_size }
     }
 
+    /// Returns the underlying address.
     pub const fn addr(&self) -> Addr<S> { self.base }
 
+    /// Alias of [`Self::addr`]
     pub const fn start(&self) -> Addr<S> { self.base }
 
-    pub const fn end(&self) -> Addr<S> { self.base.byte_add(self.page_size.usize()) }
-
+    /// Returns the underlying page size.
     pub const fn page_size(&self) -> PageSize { self.page_size }
 
-    pub const fn size(&self) -> usize { self.page_size.usize() }
-
-    pub const fn range(&self) -> Range<Addr<S>> { self.start()..self.end() }
-
+    /// Increment the address by `page_cnt` pages.
+    ///
+    /// Returns `None` if the resulting address overflows the address space.
     pub fn checked_page_add(mut self, page_cnt: usize) -> Option<Self> {
         self.base = self
             .base
@@ -264,6 +300,9 @@ impl<S: AddrSpace> PageAddr<S> {
         Some(self)
     }
 
+    /// Decrement the address by `page_cnt` pages.
+    ///
+    /// Returns `None` if the resulting address overflows the address space.
     pub fn checked_page_sub(mut self, page_cnt: usize) -> Option<Self> {
         self.base = self
             .base
@@ -275,12 +314,14 @@ impl<S: AddrSpace> PageAddr<S> {
 /// A contiguous range of pages
 #[derive(Debug, Clone, Copy)]
 pub struct PageRange<S: AddrSpace> {
+    /// Starting address of the page range.
     pub base: PageAddr<S>,
+    /// Number of pages in the page range.
     pub len: usize,
 }
 impl<S: AddrSpace> Into<AddrRange<S>> for PageRange<S> {
     fn into(self) -> AddrRange<S> {
-        let size = self.len * self.base.size();
+        let size = self.len * self.base.page_size().usize();
         let base = self.base.addr();
         AddrRange { base, size }
     }
@@ -301,14 +342,19 @@ impl<S: AddrSpace> IntoIterator for PageRange<S> {
     }
 }
 impl<S: AddrSpace> PageRange<S> {
+    /// Creates an empty page range aligned to `page_size`.
     pub const fn empty(page_size: PageSize) -> Self {
         let base = PageAddr::new(Addr::new(S::RANGE.start), page_size);
         let len = 0;
         Self { base, len }
     }
 
+    /// Returns the underlying page size.
     pub const fn page_size(&self) -> PageSize { self.base.page_size }
 
+    /// Create a `PageRange` from an address range.
+    ///
+    /// Returns `None` if the range is not page aligned.
     pub const fn try_from_range(range: AddrRange<S>, page_size: PageSize) -> Option<Self> {
         if !range.base.is_aligned_to(page_size.align()) {
             return None;
@@ -325,6 +371,10 @@ impl<S: AddrSpace> PageRange<S> {
     }
 }
 
+/// An "allocator" for page-sized blocks in an [`AddrSpace`].
+///
+/// This does **not** manage virtual memory mapping, and does not implement
+/// [`alloc::Allocator`][`core::alloc::Allocator`].
 pub trait PageManager<S: AddrSpace> {
     /// Allocates contiguous `cnt` of `page_size`-sized pages
     ///
@@ -359,24 +409,38 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Hardware paging page size.
+///
+/// # Requirements
+/// The kernel assumes certain properties regarding the pages.
+/// - All page sizes are powers of two.
+/// - The alignment equals the size of a page.
 pub enum PageSize {
     Small,
     Large,
     Huge,
 }
 impl PageSize {
+    /// Largest page size
     pub const MAX: Self = Self::Huge;
+    /// Smallest page size
     pub const MIN: Self = Self::Small;
 
+    /// Returns memory layout of a page of size `self`.
     pub fn layout(self) -> Layout {
         Layout::from_size_align(self.usize(), self.align())
             .expect("PageSize should specify a valid page layout.")
     }
 
+    /// Returns memory alignment in bytes of a page of size `self`.
+    ///
+    /// This should be same as the page's size in bytes.
     pub const fn align(self) -> usize { self.usize() }
 
+    /// Returns base-2 log of page size in bytes.
     pub const fn order(self) -> u8 { self.usize().trailing_zeros() as u8 }
 
+    /// Returns page size in bytes.
     pub const fn usize(self) -> usize {
         match self {
             PageSize::Small => 4 * KiB,

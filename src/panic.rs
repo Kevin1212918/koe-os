@@ -10,12 +10,15 @@ fn panic(info: &PanicInfo) -> ! {
     let mut vga_buffer = VGA_BUFFER.lock();
     vga_buffer.clear();
     vga_buffer.set_color(Color::Red, Color::Black, true);
-    write!(
+
+    if let Err(_) = write!(
         *vga_buffer,
         "KERNEL PANIC: {} at \n{:?}",
         info.message(),
         info.location(),
-    );
+    ) {
+        // I hope linter is happy >:(
+    }
     drop(vga_buffer);
     hlt()
 }

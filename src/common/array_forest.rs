@@ -1,11 +1,7 @@
 use alloc::alloc::{AllocError, Allocator};
 use alloc::slice;
-use core::fmt::Write as _;
 use core::ops::{Deref, DerefMut};
 
-use crate::common::hlt;
-use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
 
 // NOTE: Currently ArrayForest leaks memory when dropped.
 
