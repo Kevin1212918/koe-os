@@ -1,6 +1,7 @@
 use core::fmt::Write as _;
 use core::ops::Deref;
 
+use ::alloc::vec::Vec;
 use addr::Addr;
 use multiboot2::BootInformation;
 use paging::MMU;
@@ -15,7 +16,9 @@ mod virt;
 
 pub use phy::LinearSpace;
 
+use crate::common::hlt;
 use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
@@ -31,6 +34,44 @@ pub fn init(boot_info: BootInformation) {
         .memory_map_tag()
         .expect("Currently does not support uefi memory map");
     phy::init(memory_info.memory_areas());
+
+
+
+    // FIXME: reorganize test cases
+    let mut test = Vec::new();
+    for i in 0..1200 {
+        test.push(i);
+    }
+    let mut test2: Vec<u32> = Vec::new();
+    for i in 0..1200 {
+        test2.push(i);
+    }
+    for i in test.iter().enumerate() {
+        assert!(i.0 == *i.1 as usize);
+    }
+    for i in test2.iter().enumerate() {
+        assert!(i.0 == *i.1 as usize);
+    }
+    drop(test);
+    for i in test2.iter().enumerate() {
+        assert!(i.0 == *i.1 as usize);
+    }
+    let mut test3 = Vec::new();
+    for j in 0..1200 {
+        let mut inner = Vec::new();
+        for i in 0..10 {
+            inner.push(i * j);
+        }
+        test3.push(inner);
+    }
+    for i in test2.iter().enumerate() {
+        assert!(i.0 == *i.1 as usize);
+    }
+    for (j, list) in test3.iter().enumerate() {
+        for (i, num) in list.iter().enumerate() {
+            assert!(*num as usize == i * j);
+        }
+    }
 }
 
 #[inline]

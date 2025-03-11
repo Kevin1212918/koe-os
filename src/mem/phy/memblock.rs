@@ -18,7 +18,7 @@ use crate::log;
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
-use crate::mem::LinearSpace;
+use crate::mem::{kernel_end_lma, LinearSpace};
 
 pub fn init(memory_areas: &[MemoryArea]) -> Pin<&mut MemblockSystem> {
     // SAFETY: BMM is not accessed elsewhere in the module, and init is called
@@ -210,9 +210,22 @@ impl MemblockSystem {
         let mut min_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.end - 1);
         let mut max_addr: Addr<LinearSpace> = Addr::new(LinearSpace::RANGE.start);
 
-        for block in memory.iter().map(|x| Memblock::from(x)) {
+        for mut block in memory.iter().map(|x| Memblock::from(x)) {
             // Skip the block if it is reserved.
             if block.typ == MemTyp::Reserved {
+                continue;
+            }
+            // Skip the block if it is below end of kernel
+            if block.base + block.size < kernel_end_lma() {
+                continue;
+            }
+
+            if block.base < kernel_end_lma() {
+                block.size = block.size - ((kernel_end_lma() - block.base) as usize);
+                block.base = kernel_end_lma();
+            }
+
+            if block.size == 0 {
                 continue;
             }
 
@@ -228,6 +241,11 @@ impl MemblockSystem {
             // function.
             unsafe { blocks_ptr.as_mut_unchecked().insert(block) };
         }
+
+        debug_assert!(
+            min_addr < max_addr,
+            "No available memory"
+        );
 
         // SAFETY: free_blocks was initalized at the beginning of this function.
         let partial_block = unsafe { (&raw mut (*tbi).free_blocks).as_mut_unchecked().pop() };

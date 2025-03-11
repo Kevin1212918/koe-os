@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
+use core::fmt::Write as _;
 use core::iter::empty;
 use core::marker::PhantomData;
 use core::mem::{offset_of, MaybeUninit};
@@ -23,6 +24,8 @@ use super::paging::{Flag, MemoryManager};
 use super::phy::PhysicalMemoryManager;
 use super::virt::VirtSpace;
 use super::LinearSpace;
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::{AddrRange, AddrSpace, PageRange};
 use crate::mem::paging::MMU;
 use crate::mem::phy::PMM;

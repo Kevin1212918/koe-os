@@ -12,9 +12,11 @@ use table::{RawTable, TableRef};
 use super::addr::{Addr, PageAddr, PageManager, PageSize};
 use super::virt::{RecursivePagingSpace, VirtSpace};
 use super::LinearSpace;
+use crate::log;
 use crate::mem::addr::AddrSpace;
 use crate::mem::virt::KernelSpace;
 use crate::mem::{kernel_end_vma, kernel_size};
+use crate::drivers::vga::VGA_BUFFER;
 
 mod entry;
 mod table;

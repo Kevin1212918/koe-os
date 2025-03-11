@@ -1,7 +1,9 @@
 use alloc::alloc::{AllocError, Allocator, Global};
 use alloc::boxed::Box;
 use core::alloc::{GlobalAlloc, Layout};
+use core::any::type_name;
 use core::cell::UnsafeCell;
+use core::fmt::Write as _;
 use core::marker::PhantomData;
 use core::mem::{offset_of, transmute, MaybeUninit};
 use core::ptr::NonNull;
@@ -17,7 +19,10 @@ use pinned_init::{
 
 use super::page::PageAllocator;
 use super::{allocate_if_zst, deallocate_if_zst};
+use crate::common::hlt;
 use crate::common::ll::{self, BoxLinkedListExt as _, Link, LinkedList};
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::PageSize;
 
 pub struct SlabAllocator;
@@ -56,7 +61,7 @@ unsafe impl Allocator for SlabAllocatorRecord {
             .next_multiple_of(1 << SlabAllocator::MIN_ORDER)
             .next_power_of_two()
             .ilog2() as u8;
-        let mut cache = self.caches[slot_order as usize].lock();
+        let mut cache = self.caches[(slot_order - SlabAllocator::MIN_ORDER) as usize].lock();
 
         // TODO: Refactor this shit
         // SAFETY: Cache for order i is always located at index i
@@ -88,7 +93,7 @@ unsafe impl Allocator for SlabAllocatorRecord {
             .next_multiple_of(1 << SlabAllocator::MIN_ORDER)
             .next_power_of_two()
             .ilog2() as u8;
-        let mut cache = self.caches[slot_order as usize].lock();
+        let mut cache = self.caches[(slot_order - SlabAllocator::MIN_ORDER) as usize].lock();
         // TODO: Refactor this shit
         // SAFETY: Cache for order i is always located at index i
         unsafe {
@@ -182,22 +187,18 @@ impl<T: Item> Cache<T> {
 
         if slab_cursor.is_null() {
             slab_cursor = self.inner.empty_slabs.front_mut();
-            let new_partial = match slab_cursor.remove() {
-                Some(slab) => slab,
-                None => {
-                    let mut box_slab = BoxSlab::try_new_uninit_in(PageAllocator).ok()?;
-                    // SAFETY: BoxSlab holds a UnsafeCell<UntypedSlab>, which has the same layout as
-                    // Slab<T>. On initialization failure, function will early exit and
-                    // deallocate.
-                    unsafe { Slab::<T>::new_unsafe_cell().__init(box_slab.as_mut_ptr().cast()) }
-                        .ok()?;
-                    // SAFETY: Initialized above.
-                    unsafe { box_slab.assume_init() }
-                },
-            };
-            self.inner.partial_slabs.push_front(new_partial);
-            slab_cursor = self.inner.partial_slabs.front_mut();
         }
+        if slab_cursor.is_null() {
+            let mut box_slab = BoxSlab::try_new_uninit_in(PageAllocator).ok()?;
+            // SAFETY: BoxSlab holds a UnsafeCell<UntypedSlab>, which has the same layout as
+            // Slab<T>. On initialization failure, function will early exit and
+            // deallocate.
+            unsafe { Slab::<T>::new_unsafe_cell().__init(box_slab.as_mut_ptr().cast()) }.ok()?;
+            // SAFETY: Initialized above.
+            slab_cursor.insert_after(unsafe { box_slab.assume_init() });
+            slab_cursor.move_next();
+        }
+
         debug_assert!(
             !slab_cursor.is_null(),
             "Cursor should now point to a valid slab"
@@ -208,11 +209,13 @@ impl<T: Item> Cache<T> {
         // SAFETY: Cache exclusively owns the slab. Since there is a mutable
         // reference to cache, there cannot be other references to the slab.
         let slab = unsafe { slab.get().as_mut_unchecked() };
+        let slab: &mut Slab<T> = unsafe { slab.typed() };
 
-        let slab = unsafe { slab.typed() };
+
         let was_empty = slab.is_empty();
         let ret = slab.reserve();
-        let is_full = slab.is_empty();
+        let is_full = slab.is_full();
+
         if !was_empty && !is_full {
             return ret;
         }
@@ -234,6 +237,7 @@ impl<T: Item> Cache<T> {
         // SAFETY: Cache exclusively owns the slab. Since there is a mutable
         // reference to cache, there cannot be other references to the slab.
         let slab = unsafe { slab_ptr.as_mut() };
+
 
         let was_full = slab.is_full();
         // SAFETY: ptr was reserved from this slab.
@@ -262,6 +266,12 @@ impl<T: Item> Cache<T> {
         };
         list.push_front(slab);
     }
+}
+#[derive(PartialEq, Eq)]
+enum SlabFillLevel {
+    Empty,
+    Partial,
+    Full,
 }
 
 // TODO: PORT
@@ -331,7 +341,7 @@ impl<T: Item> Slab<T> {
     };
     const SLOTS_START: usize = const {
         let buf_start = offset_of!(UntypedSlab, buf);
-        let slots_start = buf_start.next_multiple_of(Self::SLOT_ALIGN);
+        let slots_start = buf_start.next_multiple_of(Self::SLOT_ALIGN) - buf_start;
         assert!(slots_start < SLAB_PAGE.usize());
         slots_start
     };
@@ -363,9 +373,17 @@ impl<T: Item> Slab<T> {
         unsafe { slice::from_raw_parts_mut(slots_start, Self::SLOT_SIZE) }
     }
 
-    fn is_empty(&self) -> bool { self.inner.free_cnt == 0 }
+    fn is_empty(&self) -> bool { matches!(self.fill_level(), SlabFillLevel::Empty) }
 
-    fn is_full(&self) -> bool { self.inner.free_cnt as usize == Self::SLOTS_LEN }
+    fn is_full(&self) -> bool { matches!(self.fill_level(), SlabFillLevel::Full) }
+
+    fn fill_level(&self) -> SlabFillLevel {
+        match self.inner.free_cnt as usize {
+            0 => SlabFillLevel::Empty,
+            SLOTS_LEN => SlabFillLevel::Full,
+            _ => SlabFillLevel::Partial,
+        }
+    }
 
     fn new() -> impl Init<Self> {
         init!(Self {
@@ -383,19 +401,20 @@ impl<T: Item> Slab<T> {
     }
 
     fn reserve(&mut self) -> Option<NonNull<T>> {
-        if self.inner.free_cnt as usize >= Self::SLOTS_LEN {
+        if self.inner.free_cnt as usize == 0 {
             return None;
         }
 
         let map = self.map_mut();
         // SAFETY: Since free_cnt is not greater or equal to SLOTS_LEN, there
         // must be at least one slot not occupied.
-        let idx = unsafe { map.first_one().unwrap_unchecked() };
+        // let idx = unsafe { map.first_one().unwrap_unchecked() };
+        let idx = map.first_one().unwrap();
         debug_assert!(idx < Self::SLOTS_LEN);
-        // SAFETY: idx was returned from first_zero
+        // SAFETY: idx was returned from first_one
         unsafe { map.replace_unchecked(idx, false) };
 
-        self.inner.free_cnt += 1;
+        self.inner.free_cnt -= 1;
         let uninit = &mut self.slots_mut()[idx];
         NonNull::new(uninit.as_mut_ptr().cast())
     }
@@ -412,11 +431,11 @@ impl<T: Item> Slab<T> {
         let idx = unsafe { ptr.as_ptr().offset_from(self.slots().as_ptr().cast()) };
         let idx = idx as usize;
 
-        debug_assert!(self.map()[idx]);
+        debug_assert!(!self.map()[idx]);
         // SAFETY: Since ptr is within bound, its offset from beginning of
         // slots should be within bound as well.
         unsafe { self.map_mut().replace_unchecked(idx, true) };
-        self.inner.free_cnt -= 1;
+        self.inner.free_cnt += 1;
     }
 
     /// Derive a pointer to the containing slab from a pointer to an element.
@@ -424,12 +443,11 @@ impl<T: Item> Slab<T> {
     /// # Safety
     /// 'ptr' points to an element in an existing slab.
     unsafe fn from_elem_ptr(ptr: NonNull<T>) -> NonNull<Self> {
-        let offset = SLAB_PAGE.align() - ptr.align_offset(SLAB_PAGE.align());
+        // FIXME: FIX THIS
+        let offset = (ptr.as_ptr() as usize) % SLAB_PAGE.align();
         // SAFETY: No slab should be at 0 pointer.
         unsafe { ptr.byte_sub(offset) }.cast()
     }
-
-    fn untyped(self) -> UntypedSlab { self.inner }
 }
 
 pub trait Item: Sized {

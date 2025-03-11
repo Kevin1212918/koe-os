@@ -1,8 +1,12 @@
 use alloc::alloc::{AllocError, Allocator};
 use core::alloc::Layout;
+use core::fmt::Write as _;
 use core::ops::Div as _;
 use core::ptr::NonNull;
 
+use crate::common::hlt;
+use crate::drivers::vga::VGA_BUFFER;
+use crate::log;
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageManager, PageRange, PageSize};
 use crate::mem::alloc::{allocate_if_zst, deallocate_if_zst};
 use crate::mem::paging::{Flag, MemoryManager, MMU};
@@ -29,28 +33,28 @@ unsafe impl Allocator for PageAllocator {
         let mut pmm = PMM.get().ok_or(AllocError)?.lock();
 
         let prange = pmm.allocate_pages(page_cnt, page_size).ok_or(AllocError)?;
-        debug_assert!(prange.len == page_cnt);
+        debug_assert!(prange.len >= page_cnt);
+        debug_assert!(prange.page_size() >= page_size);
 
         let vbase = PhysicalRemapSpace::p2v(prange.base.addr());
-        let vrange = AddrRange::new(vbase, page_cnt * page_size.usize());
-        let vrange = PageRange::try_from_range(vrange, page_size)
-            .expect("vbase and size should be page_aligned.");
+        // let vrange = AddrRange::new(vbase, page_cnt * page_size.usize());
+        // let vrange = PageRange::try_from_range(vrange, page_size)
+        //     .expect("vbase and size should be page_aligned.");
 
         let ptr = NonNull::new(vbase.into_ptr())
             .expect("successfull virtual page allocation should not return null address");
 
-        // TODO: Pass flags from caller.
-        let flags = [Flag::Present, Flag::ReadWrite];
-        for (vpage, ppage) in Iterator::zip(vrange.into_iter(), prange.into_iter()) {
-            unsafe {
-                MMU.map(vpage, ppage, flags, &mut pmm)
-                    .expect("TODO: cleanup");
-            }
-        }
+        // let flags = [Flag::Present, Flag::ReadWrite];
+        // for (vpage, ppage) in Iterator::zip(vrange.into_iter(), prange.into_iter()) {
+        // unsafe {
+        // MMU.map(vpage, ppage, flags, &mut pmm)
+        // .expect("TODO: cleanup");
+        // }
+        // }
 
         Ok(NonNull::slice_from_raw_parts(
             ptr,
-            page_size.usize(),
+            page_size.usize() * prange.len,
         ))
     }
 
