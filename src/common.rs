@@ -14,10 +14,17 @@ pub fn hlt() -> ! {
 
 pub mod array_forest;
 pub mod ll;
+pub mod panic;
 
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
         write!(VGA_BUFFER.lock(), $($arg)*).ok()
     };
+}
+
+#[repr(u8)]
+pub enum Privilege {
+    User = 3,
+    Kernel = 0,
 }

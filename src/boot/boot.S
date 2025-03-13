@@ -151,8 +151,10 @@ _enable_paging:
     or eax, 1 << 31
     mov cr0, eax
 
-    /* Call rust kernel entry point */
+    /* Set up GDT */
     lgdt [gdt_ptr]
+
+    /* Call rust kernel entry point */
     ljmp offset gdt_code, offset _start_long_mode
 
 

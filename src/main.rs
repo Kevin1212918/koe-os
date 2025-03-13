@@ -23,7 +23,6 @@ mod boot;
 mod common;
 mod drivers;
 mod mem;
-mod panic;
 mod test;
 
 #[no_mangle]
