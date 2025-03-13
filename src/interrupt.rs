@@ -1,22 +1,73 @@
-use core::array;
+use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
+use core::{array, ptr};
 
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
+use handler::default_handler;
+use spin::Mutex;
 
-use crate::common::Privilege;
+use crate::common::{hlt, Privilege};
+
+mod handler;
+
+pub fn init() {
+    init_idtr();
+    let mut idt = IDT_HANDLE.lock();
+    for i in 0..22 {
+        let handler = default_handler as u64;
+        idt.0[i] = InterruptDesc::new(
+            handler as u64,
+            GateTyp::Intrpt,
+            Privilege::Kernel,
+        );
+    }
+
+    enable_interrupt();
+}
 
 // x86-64 stuff
-static IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt([InterruptDesc::ABSENT; 256]));
+fn enable_interrupt() {
+    unsafe {
+        asm!("sti");
+    }
+}
+
+fn init_idtr() {
+    let idtr = Idtr {
+        limit: (Idt::LEN * size_of::<InterruptDesc>()) as u16,
+        base: IDT.get(),
+    };
+
+    unsafe {
+        asm!(
+            "lidt [{idtr}]",
+            idtr = in(reg) &idtr as *const Idtr
+        )
+    };
+}
+
+#[repr(C, packed(2))]
+struct Idtr {
+    limit: u16,
+    base: *mut Idt,
+}
+
+static IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt([InterruptDesc::ABSENT; Idt::LEN]));
+static IDT_HANDLE: Mutex<&'static mut Idt> =
+    spin::Mutex::new(unsafe { IDT.get().as_mut_unchecked() });
 
 #[repr(C, align(16))]
 #[derive(Debug)]
-struct Idt([InterruptDesc; 256]);
+struct Idt([InterruptDesc; Self::LEN]);
+impl Idt {
+    const LEN: usize = 256;
+}
 
 #[repr(C, packed)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct InterruptDesc {
     low_low_offset: u16,
     segment_selector: u16,
@@ -45,14 +96,14 @@ impl InterruptDesc {
     const P_IDXS: Range<usize> = 15..16;
     const TYPE_IDXS: Range<usize> = 8..12;
 
-    fn new(offset: u64, typ: GateTyp, dpl: Privilege) -> Self {
-        let offset_bits = offset.view_bits::<Lsb0>();
-        let low_low_offset = offset_bits[0..16].load_le();
-        let high_low_offset = offset_bits[16..32].load_le();
-        let high_offset = offset_bits[32..64].load_le();
+    fn new(addr: u64, typ: GateTyp, dpl: Privilege) -> Self {
+        let addr_bits = addr.view_bits::<Lsb0>();
+        let low_low_offset = addr_bits[0..16].load_le();
+        let high_low_offset = addr_bits[16..32].load_le();
+        let high_offset = addr_bits[32..64].load_le();
 
-        // NOTE: The CS segment selector should be 0.
-        let segment_selector = 0;
+        // NOTE: The CS segment selector should be 8.
+        let segment_selector = 8;
         let _reserved = 0;
 
         // TODO: Implement interrupt stack table

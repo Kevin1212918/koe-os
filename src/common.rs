@@ -1,3 +1,5 @@
+use core::arch::asm;
+
 #[allow(non_upper_case_globals)]
 pub const KiB: usize = 1 << 10;
 #[allow(non_upper_case_globals)]
@@ -7,9 +9,10 @@ pub const GiB: usize = 1 << 30;
 #[allow(non_upper_case_globals)]
 pub const TiB: usize = 1 << 40;
 
+#[inline(always)]
 pub fn hlt() -> ! {
-    unsafe { core::arch::asm!("hlt") };
-    unreachable!()
+    unsafe { asm!("hlt") };
+    unreachable!();
 }
 
 pub mod array_forest;

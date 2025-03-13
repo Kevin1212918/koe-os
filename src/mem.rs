@@ -1,6 +1,10 @@
-use addr::Addr;
+use alloc::PageAllocator;
+
+use addr::{Addr, PageAddr};
 use multiboot2::BootInformation;
-use virt::{KernelSpace, PhysicalRemapSpace};
+use paging::{Flag, MemoryManager, MMU};
+use phy::PMM;
+use virt::{KernelSpace, LowSpace, PhysicalRemapSpace};
 
 
 mod addr;
@@ -26,6 +30,20 @@ pub fn init(boot_info: BootInformation) {
         .memory_map_tag()
         .expect("Currently does not support uefi memory map");
     phy::init(memory_info.memory_areas());
+
+    // TODO: Setup gdt somewhere else.
+    // identity map the page containing gdt.
+    unsafe {
+        (*MMU).map(
+            PageAddr::new(
+                Addr::<LowSpace>::new(0x20_0000),
+                PageSize::Large,
+            ),
+            PageAddr::new(Addr::new(0x20_0000), PageSize::Large),
+            [Flag::Present, Flag::Global, Flag::ReadWrite, Flag::PageSize],
+            &mut PMM.get_unchecked().lock(),
+        )
+    };
 }
 
 #[inline]

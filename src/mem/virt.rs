@@ -17,17 +17,11 @@ use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {}
 
-
-/// Marks the lowest bound of static data on heap.
-static HEAP_LOW_MARK: AtomicUsize = AtomicUsize::new(0xFFFF_E900_0000_0000);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct KernelHeapSpace;
-impl KernelHeapSpace {
-    fn low_mark() -> &'static AtomicUsize { &HEAP_LOW_MARK }
-}
-impl VirtSpace for KernelHeapSpace {}
-impl AddrSpace for KernelHeapSpace {
-    const RANGE: Range<usize> = 0xFFFF_C900_0000_0000..0xFFFF_E900_0000_0000;
+pub struct LowSpace;
+impl VirtSpace for LowSpace {}
+impl AddrSpace for LowSpace {
+    const RANGE: Range<usize> = 0x20_0000..0x40_0000;
 }
 
 

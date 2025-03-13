@@ -44,5 +44,9 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     mem::init(boot_info);
     log!("mem initalized\n");
 
+    interrupt::init();
+    log!("interrupt initialized\n");
+
+    log!("\nkernel initialized\n");
     hlt()
 }
