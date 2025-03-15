@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::{asm, global_asm};
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
 use core::{array, ptr};
@@ -6,33 +6,29 @@ use core::{array, ptr};
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
-use handler::default_handler;
+use handler::{exception_handler, ISR_TABLE};
+use pic::disable_pic;
 use spin::Mutex;
 
 use crate::common::{hlt, Privilege};
 
 mod handler;
+mod pic;
+
+// x86-64 stuff
 
 pub fn init() {
     init_idtr();
-    let mut idt = IDT_HANDLE.lock();
-    for i in 0..22 {
-        let handler = default_handler as u64;
-        idt.0[i] = InterruptDesc::new(
-            handler as u64,
-            GateTyp::Intrpt,
-            Privilege::Kernel,
-        );
-    }
+    init_exn_handlers();
+    disable_pic();
 
     enable_interrupt();
 }
 
-// x86-64 stuff
 fn enable_interrupt() {
     unsafe {
         asm!("sti");
-    }
+    };
 }
 
 fn init_idtr() {
@@ -47,6 +43,18 @@ fn init_idtr() {
             idtr = in(reg) &idtr as *const Idtr
         )
     };
+}
+
+fn init_exn_handlers() {
+    let mut idt = IDT_HANDLE.lock();
+
+    for i in 0..21 {
+        let addr = unsafe { ISR_TABLE[i] };
+        if addr == 0 {
+            continue;
+        }
+        idt.0[i] = InterruptDesc::exn(addr);
+    }
 }
 
 #[repr(C, packed(2))]
@@ -82,6 +90,7 @@ enum GateTyp {
     Intrpt = 0b1110,
     Trap = 0b1111,
 }
+
 impl InterruptDesc {
     const ABSENT: Self = Self {
         low_low_offset: 0,
@@ -96,6 +105,7 @@ impl InterruptDesc {
     const P_IDXS: Range<usize> = 15..16;
     const TYPE_IDXS: Range<usize> = 8..12;
 
+    fn exn(addr: u64) -> Self { Self::new(addr, GateTyp::Trap, Privilege::Kernel) }
     fn new(addr: u64, typ: GateTyp, dpl: Privilege) -> Self {
         let addr_bits = addr.view_bits::<Lsb0>();
         let low_low_offset = addr_bits[0..16].load_le();
@@ -125,4 +135,39 @@ impl InterruptDesc {
 }
 impl Default for InterruptDesc {
     fn default() -> Self { Self::ABSENT }
+}
+type InterruptVector = u8;
+
+const VECTOR_DE: InterruptVector = 0;
+const VECTOR_DB: InterruptVector = 1;
+const VECTOR_NMI: InterruptVector = 2;
+const VECTOR_BP: InterruptVector = 3;
+const VECTOR_OF: InterruptVector = 4;
+const VECTOR_BR: InterruptVector = 5;
+const VECTOR_UD: InterruptVector = 6;
+const VECTOR_NM: InterruptVector = 7;
+const VECTOR_DF: InterruptVector = 8;
+const VECTOR_OMF: InterruptVector = 9;
+const VECTOR_TS: InterruptVector = 10;
+const VECTOR_NP: InterruptVector = 11;
+const VECTOR_SS: InterruptVector = 12;
+const VECTOR_GP: InterruptVector = 13;
+const VECTOR_PF: InterruptVector = 14;
+const VECTOR_MF: InterruptVector = 16;
+const VECTOR_AC: InterruptVector = 17;
+const VECTOR_MC: InterruptVector = 18;
+const VECTOR_XF: InterruptVector = 19;
+const VECTOR_VE: InterruptVector = 20;
+const VECTOR_CP: InterruptVector = 21;
+
+const VECTOR_PIC: InterruptVector = 32;
+
+#[repr(C)]
+struct InterruptStack {
+    errno: usize,
+    ip: usize,
+    cs: usize,
+    flags: usize,
+    sp: usize,
+    ss: usize,
 }

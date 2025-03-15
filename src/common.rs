@@ -19,6 +19,9 @@ pub mod array_forest;
 pub mod ll;
 pub mod panic;
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+pub mod pmio;
+
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
