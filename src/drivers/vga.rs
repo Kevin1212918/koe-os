@@ -5,14 +5,14 @@ use crate::mem::kernel_offset_vma;
 /// Address of start of VGA MMIO
 const BUFFER: usize = kernel_offset_vma() + 0xb8000;
 
-/// Length of VGA buffer in bytes
-const BUFFER_LEN: usize = 0x8000; // 32 KiB
+/// Size of VGA buffer in bytes
+const BUFFER_SIZE: usize = 0x8000; // 32 KiB
 
 /// Height of terminal
-const VIEW_HEIGHT: u8 = 25;
+const VIEW_HEIGHT: usize = 25;
 
 /// Width of terminal
-const VIEW_WIDTH: u8 = 80;
+const VIEW_WIDTH: usize = 80;
 
 pub static VGA_BUFFER: spin::Lazy<spin::Mutex<VGABuffer>> =
     spin::Lazy::new(|| spin::Mutex::new(unsafe { VGABuffer::init() }));
@@ -49,7 +49,7 @@ impl VGABuffer {
         use Color::*;
 
         let color_code = color_code(Black, Black, false);
-        let buffer = unsafe { core::slice::from_raw_parts_mut(BUFFER as *mut u16, BUFFER_LEN / 2) };
+        let buffer = unsafe { core::slice::from_raw_parts_mut(BUFFER as *mut u16, VIEW_HEIGHT * VIEW_WIDTH) };
         let filler = vga_entry(color_code, 0);
         buffer.fill(filler);
 
@@ -83,7 +83,7 @@ impl VGABuffer {
         (x, y)
     }
 
-    pub const fn get_viewport_dim(&self) -> (u8, u8) { (VIEW_WIDTH as u8, VIEW_HEIGHT as u8) }
+    pub const fn viewport_dim(&self) -> (u8, u8) { (VIEW_WIDTH as u8, VIEW_HEIGHT as u8) }
 
     pub fn write_u8(&mut self, char: u8) {
         if self.cursor_pos == VIEW_HEIGHT as u16 * VIEW_WIDTH as u16 {
@@ -93,6 +93,9 @@ impl VGABuffer {
         match char {
             b'\n' => {
                 self.cursor_pos = self.cursor_pos.next_multiple_of(VIEW_WIDTH as u16);
+                if self.cursor_pos >= self.buffer.len() as u16 {
+                    self.scroll_up();
+                }
             },
             _ => {
                 self.buffer[self.cursor_pos as usize] = vga_entry(self.color_code, char);
@@ -105,6 +108,16 @@ impl VGABuffer {
         for &char in text {
             self.write_u8(char);
         }
+    }
+
+    fn scroll_up(&mut self) {
+        let width = VIEW_WIDTH as usize;
+        self.buffer.copy_within(width.., 0);
+
+        let filler = vga_entry(self.color_code, 0);
+        let buffer_len = self.buffer.len();
+        self.buffer[(buffer_len - width)..].fill(filler);
+        self.cursor_pos -= VIEW_WIDTH as u16;
     }
 }
 
