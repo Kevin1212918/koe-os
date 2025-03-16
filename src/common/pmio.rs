@@ -2,6 +2,7 @@ use core::arch::asm;
 use core::u8;
 
 #[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
 pub struct Port(pub u16);
 
 #[inline(always)]

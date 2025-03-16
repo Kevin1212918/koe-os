@@ -1,5 +1,5 @@
 use super::VECTOR_PIC;
-use crate::common::pmio::{outb, Port};
+use crate::common::pmio::{inb, outb, Port};
 
 const PIC1_CMD_PORT: Port = Port(0x20);
 const PIC1_DATA_PORT: Port = Port(0x21);
@@ -40,17 +40,18 @@ pub fn initialize_pic() {
     outb(PIC2_DATA_PORT, ICW4);
 }
 
-pub fn disable_pic() {
+pub fn mask_all() {
     outb(PIC1_DATA_PORT, 0xff);
     outb(PIC2_DATA_PORT, 0xff);
 }
 
-pub fn enable_pic() {
+pub fn unmask_all() {
     outb(PIC1_DATA_PORT, 0);
     outb(PIC2_DATA_PORT, 0);
 }
 
-pub fn ack_irq(irq: u8) {
+
+pub fn ack(irq: u8) {
     const EOI: u8 = 0x20;
     match irq {
         0..8 => outb(PIC1_CMD_PORT, EOI),
@@ -58,4 +59,44 @@ pub fn ack_irq(irq: u8) {
         // Don't do anything on invalid irq
         _ => (),
     }
+}
+
+pub fn mask(irq: u8) {
+    let irq_offset: u8;
+    let pic: Port;
+    match irq {
+        0..8 => {
+            irq_offset = irq;
+            pic = PIC1_DATA_PORT;
+        },
+        8..16 => {
+            irq_offset = irq - 8;
+            pic = PIC2_DATA_PORT;
+        },
+        // Don't do anything on invalid irq
+        _ => return,
+    }
+
+    let mask = inb(pic);
+    outb(pic, mask | 1 << irq_offset);
+}
+
+pub fn unmask(irq: u8) {
+    let irq_offset: u8;
+    let pic: Port;
+    match irq {
+        0..8 => {
+            irq_offset = irq;
+            pic = PIC1_DATA_PORT;
+        },
+        8..16 => {
+            irq_offset = irq - 8;
+            pic = PIC2_DATA_PORT;
+        },
+        // Don't do anything on invalid irq
+        _ => return,
+    }
+
+    let mask = inb(pic);
+    outb(pic, mask & !(1 << irq_offset));
 }

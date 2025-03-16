@@ -24,12 +24,14 @@ fn double_fault_handler(stack: &InterruptStack) {
     hlt();
 }
 
+fn default_exn_handler() {}
+
 #[no_mangle]
 pub extern "C" fn exception_handler(vec: InterruptVector, stack: &InterruptStack) {
     match vec {
         VECTOR_PF => page_fault_handler(stack),
         VECTOR_DF => double_fault_handler(stack),
-        _ => (),
+        _ => default_exn_handler(),
     }
 }
 

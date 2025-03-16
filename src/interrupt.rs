@@ -1,13 +1,13 @@
 use core::arch::{asm, global_asm};
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
+use core::sync::atomic::{self, AtomicUsize};
 use core::{array, ptr};
 
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use handler::{exception_handler, ISR_TABLE};
-use pic::disable_pic;
 use spin::Mutex;
 
 use crate::common::{hlt, Privilege};
@@ -15,19 +15,45 @@ use crate::common::{hlt, Privilege};
 mod handler;
 mod pic;
 
+/// An RAII implementation of reentrant interrupt lock. This structure
+/// guarentees that interrupt is disabled.
+pub struct InterruptGuard();
+impl InterruptGuard {
+    pub fn new() -> Self {
+        disable_interrupt();
+        INTERRUPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
+        Self()
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        let prev_cnt = INTERRUPT_GUARD_CNT.fetch_sub(1, atomic::Ordering::Relaxed);
+        if prev_cnt == 1 {
+            enable_interrupt();
+        }
+    }
+}
+static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
+
 // x86-64 stuff
 
 pub fn init() {
     init_idtr();
     init_exn_handlers();
-    disable_pic();
-
+    pic::mask_all();
     enable_interrupt();
 }
 
 fn enable_interrupt() {
     unsafe {
         asm!("sti");
+    };
+}
+
+fn disable_interrupt() {
+    unsafe {
+        asm!("cli");
     };
 }
 
@@ -63,7 +89,7 @@ struct Idtr {
     base: *mut Idt,
 }
 
-static IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt([InterruptDesc::ABSENT; Idt::LEN]));
+static IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt([InterruptDesc::null(); Idt::LEN]));
 static IDT_HANDLE: Mutex<&'static mut Idt> =
     spin::Mutex::new(unsafe { IDT.get().as_mut_unchecked() });
 
@@ -92,14 +118,6 @@ enum GateTyp {
 }
 
 impl InterruptDesc {
-    const ABSENT: Self = Self {
-        low_low_offset: 0,
-        segment_selector: 0,
-        attributes: 0,
-        high_low_offset: 0,
-        high_offset: 0,
-        _reserved: 0,
-    };
     const DPL_IDXS: Range<usize> = 13..15;
     const IST_IDXS: Range<usize> = 0..2;
     const P_IDXS: Range<usize> = 15..16;
@@ -132,9 +150,19 @@ impl InterruptDesc {
             _reserved,
         }
     }
+    const fn null() -> Self {
+        Self {
+            low_low_offset: 0,
+            segment_selector: 0,
+            attributes: 0,
+            high_low_offset: 0,
+            high_offset: 0,
+            _reserved: 0,
+        }
+    }
 }
 impl Default for InterruptDesc {
-    fn default() -> Self { Self::ABSENT }
+    fn default() -> Self { Self::null() }
 }
 type InterruptVector = u8;
 
