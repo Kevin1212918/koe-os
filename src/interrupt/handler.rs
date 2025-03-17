@@ -4,6 +4,7 @@ use core::fmt::Write as _;
 use core::mem::MaybeUninit;
 use core::ptr;
 
+use super::pic::ack;
 use super::{InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF};
 use crate::common::hlt;
 use crate::drivers::vga::VGA_BUFFER;
@@ -34,7 +35,6 @@ pub extern "C" fn exception_handler(vec: InterruptVector, stack: &InterruptStack
         _ => default_exn_handler(),
     }
 }
-
 
 // x86-64 stuff
 global_asm!(include_str!("handler.S"));

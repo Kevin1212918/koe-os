@@ -10,6 +10,7 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
+arraydeque = { version = "0.5.1", default-features = false }
 arrayvec = { version = "0.7.6", default-features = false }
 bitflags = "2.8.0"
 bitvec = { version = "1.0.1", default-features = false }

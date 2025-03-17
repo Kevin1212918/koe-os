@@ -8,6 +8,7 @@ use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use handler::{exception_handler, ISR_TABLE};
+use pic::init_pic;
 use spin::Mutex;
 
 use crate::common::{hlt, Privilege};
@@ -36,11 +37,15 @@ impl Drop for InterruptGuard {
 }
 static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
 
+pub type IrqHandler = fn();
+
 // x86-64 stuff
 
 pub fn init() {
     init_idtr();
     init_exn_handlers();
+    init_pic();
+
     pic::mask_all();
     enable_interrupt();
 }

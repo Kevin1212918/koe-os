@@ -1,5 +1,5 @@
 use super::VECTOR_PIC;
-use crate::common::pmio::{inb, outb, Port};
+use crate::common::pmio::{inb, outb, Port, WPort};
 
 const PIC1_CMD_PORT: Port = Port(0x20);
 const PIC1_DATA_PORT: Port = Port(0x21);
@@ -26,7 +26,7 @@ const ICW3_PIC2: u8 = 2;
 // Operate in 80x86 mode
 const ICW4: u8 = 0b0000_0001;
 
-pub fn initialize_pic() {
+pub fn init_pic() {
     outb(PIC1_CMD_PORT, ICW1);
     outb(PIC2_CMD_PORT, ICW1);
 
