@@ -20,6 +20,7 @@ const CMD_PORT: WPort = WPort(0x64);
 static KEYBOARD_SRC: spin::Once<SyncUnsafeCell<Ps2KeyboardSrc>> = spin::Once::new();
 pub static KEYBOARD: spin::Once<SyncUnsafeCell<Ps2Keyboard>> = spin::Once::new();
 
+// TODO: Properly initialize ps2
 pub fn init() {
     let key_buffer = Rb::new(128);
     let (prod, cons) = key_buffer.split();
@@ -110,6 +111,10 @@ impl Sc1 {
                 KEY_RESERVED..=KEY_KPDOT | KEY_F11..=KEY_F12 => Some((byte as KeyCode, true)),
                 KEY_RESERVED_R..=KEY_KPDOT_R | KEY_F11_R..=KEY_F12_R =>
                     Some((byte - 0x80 as KeyCode, false)),
+                0x0F => Some((KEY_BACKSPACE, true)),
+                0x8F => Some((KEY_BACKSPACE, false)),
+                0x39 => Some((KEY_SPACE, true)),
+                0xB9 => Some((KEY_SPACE, false)),
                 0xE0 => {
                     // *sc1 = Sc1::Extra(0xE0);
                     None

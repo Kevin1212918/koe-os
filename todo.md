@@ -1,6 +1,5 @@
-[ ] Paging
-[ ] IRQ
+[ ] Initrd
+[ ] Userspace
+[ ] ELF loader
 [ ] Scheduler
 [ ] Standard IO
-[ ] ELF loader
-[ ] PCI IDE Controller

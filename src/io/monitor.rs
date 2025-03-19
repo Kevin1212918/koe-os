@@ -62,6 +62,8 @@ fn ketoa(ke: KeyEvent) -> Option<u8> {
         KEY_Z => Some(b'z' - cap_offset),
 
         KEY_ENTER => Some(b'\n'),
+        KEY_SPACE => Some(b' '),
+        KEY_BACKSPACE => Some(0x8),
 
         _ => None,
     }
