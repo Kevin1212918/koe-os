@@ -53,7 +53,7 @@ pub fn inb(port: impl Into<RPort>) -> u8 {
     let value: u8;
     unsafe {
         asm!(
-            "in dx, al",
+            "in al, dx",
             in("dx") port.into().0,
             out("al") value,
         )
@@ -66,7 +66,7 @@ pub fn inw(port: impl Into<RPort>) -> u16 {
     let value: u16;
     unsafe {
         asm!(
-            "in dx, ax",
+            "in ax, dx",
             in("dx") port.into().0,
             out("ax") value,
         )
@@ -79,7 +79,7 @@ pub fn inl(port: impl Into<RPort>) -> u32 {
     let value: u32;
     unsafe {
         asm!(
-            "in dx, eax",
+            "in eax, dx",
             in("dx") port.into().0,
             out("eax") value,
         )

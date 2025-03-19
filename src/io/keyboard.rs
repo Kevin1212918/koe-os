@@ -1,8 +1,72 @@
 use arraydeque::ArrayDeque;
-use keycode::KeyCode;
+use bitflags::bitflags;
+use bitvec::order::Lsb0;
+use bitvec::view::BitView;
+use keycode::*;
 
-pub static KEYBOARD_Q: spin::Mutex<ArrayDeque<KeyCode, 256, arraydeque::Wrapping>> =
-    spin::Mutex::new(ArrayDeque::new());
+const STATES_LEN: usize = (KEYCODE_MAX + 1).div_ceil(64) as usize;
+pub trait Keyboard: Iterator<Item = KeyEvent> {}
+
+pub struct VirtKeyboard {
+    states: [u64; STATES_LEN],
+    modifier: Modifier,
+}
+
+impl VirtKeyboard {
+    pub const fn new() -> Self {
+        Self {
+            states: [0; STATES_LEN],
+            modifier: Modifier::empty(),
+        }
+    }
+    pub fn parse(&mut self, packet: (KeyCode, bool)) -> Option<KeyEvent> {
+        self.update(packet);
+        Some(self.event(packet))
+    }
+    fn update(&mut self, packet: (KeyCode, bool)) {
+        self.states
+            .view_bits_mut::<Lsb0>()
+            .set(packet.0 as usize, packet.1);
+        match packet {
+            (KEY_LEFTALT, is_press) => self.modifier.set(Modifier::ALT, is_press),
+            (KEY_LEFTCTRL, is_press) => self.modifier.set(Modifier::CTRL, is_press),
+            (KEY_LEFTSHIFT, is_press) | (KEY_RIGHTSHIFT, is_press) =>
+                self.modifier.set(Modifier::SHIFT, is_press),
+
+            (KEY_CAPSLOCK, true) => self.modifier.toggle(Modifier::CAPSLOCK),
+            (KEY_SCROLLLOCK, true) => self.modifier.toggle(Modifier::SCROLLLOCK),
+            (KEY_NUMLOCK, true) => self.modifier.toggle(Modifier::NUMLOCK),
+
+            _ => (),
+        }
+    }
+    fn event(&self, packet: (KeyCode, bool)) -> KeyEvent {
+        KeyEvent {
+            key: packet.0,
+            is_press: packet.1,
+            modifier: self.modifier,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct KeyEvent {
+    pub key: KeyCode,
+    pub is_press: bool,
+    pub modifier: Modifier,
+}
+
+bitflags! {
+#[derive(Clone, Copy)]
+pub struct Modifier: u8 {
+    const ALT = 0b1;
+    const SHIFT = 0b10;
+    const CTRL = 0b100;
+    const CAPSLOCK = 0b1000;
+    const SCROLLLOCK = 0b10000;
+    const NUMLOCK = 0b100000;
+}}
+
 
 pub mod keycode {
     pub type KeyCode = u16;
@@ -95,4 +159,6 @@ pub mod keycode {
 
     pub const KEY_F11: KeyCode = 87;
     pub const KEY_F12: KeyCode = 88;
+
+    pub const KEYCODE_MAX: KeyCode = 88;
 }

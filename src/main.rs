@@ -17,12 +17,15 @@ extern crate alloc;
 use core::fmt::Write as _;
 
 use common::hlt;
+use drivers::ps2;
+use io::monitor::Monitor;
 use multiboot2::{BootInformation, BootInformationHeader};
 
 mod boot;
 mod common;
 mod drivers;
 mod interrupt;
+mod io;
 mod mem;
 mod test;
 
@@ -47,6 +50,12 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     interrupt::init();
     log!("interrupt initialized\n");
 
+    drivers::init();
+    log!("drivers initialized\n");
+
     log!("\nkernel initialized\n");
+    let kb = unsafe { ps2::KEYBOARD.get().unwrap().get().as_mut_unchecked() };
+    let mut monitor = Monitor::new(kb);
+    monitor.start();
     hlt()
 }

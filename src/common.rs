@@ -11,8 +11,9 @@ pub const TiB: usize = 1 << 40;
 
 #[inline(always)]
 pub fn hlt() -> ! {
-    unsafe { asm!("hlt") };
-    unreachable!();
+    loop {
+        unsafe { asm!("hlt") };
+    }
 }
 
 pub mod array_forest;

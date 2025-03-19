@@ -44,9 +44,11 @@ pub type IrqHandler = fn();
 pub fn init() {
     init_idtr();
     init_exn_handlers();
+    init_irq_handlers();
     init_pic();
 
     pic::mask_all();
+    pic::unmask(1);
     enable_interrupt();
 }
 
@@ -79,12 +81,24 @@ fn init_idtr() {
 fn init_exn_handlers() {
     let mut idt = IDT_HANDLE.lock();
 
-    for i in 0..21 {
+    for i in 0..=21 {
         let addr = unsafe { ISR_TABLE[i] };
         if addr == 0 {
             continue;
         }
         idt.0[i] = InterruptDesc::exn(addr);
+    }
+}
+
+fn init_irq_handlers() {
+    let mut idt = IDT_HANDLE.lock();
+
+    for i in 32..=47 {
+        let addr = unsafe { ISR_TABLE[i] };
+        if addr == 0 {
+            continue;
+        }
+        idt.0[i] = InterruptDesc::irq(addr);
     }
 }
 
@@ -129,6 +143,7 @@ impl InterruptDesc {
     const TYPE_IDXS: Range<usize> = 8..12;
 
     fn exn(addr: u64) -> Self { Self::new(addr, GateTyp::Trap, Privilege::Kernel) }
+    fn irq(addr: u64) -> Self { Self::new(addr, GateTyp::Trap, Privilege::Kernel) }
     fn new(addr: u64, typ: GateTyp, dpl: Privilege) -> Self {
         let addr_bits = addr.view_bits::<Lsb0>();
         let low_low_offset = addr_bits[0..16].load_le();
