@@ -25,6 +25,7 @@ mod boot;
 mod common;
 mod drivers;
 mod interrupt;
+mod usr;
 mod io;
 mod mem;
 mod test;
@@ -54,8 +55,6 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     log!("drivers initialized\n");
 
     log!("\nkernel initialized\n");
-    let kb = unsafe { ps2::KEYBOARD.get().unwrap().get().as_mut_unchecked() };
-    let mut monitor = Monitor::new(kb);
-    monitor.start();
     hlt()
 }
+
