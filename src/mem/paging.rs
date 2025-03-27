@@ -121,31 +121,33 @@ impl MemoryManager for X86_64MemoryManager {
         fn init_physical_remap(bmm: &BootMemoryManager, kernel_map_end: Addr<KernelSpace>) {
             // Setting up a 2MB page table at the end of kernel to hold PhysicalRemapSpace
             // tables.
-            let page_table_pd_start = kernel_map_end;
-            let ent_addr = KernelSpace::v2p(Addr::new(
-                LINEAR_PAGE_TABLE.get() as usize
-            ));
+            let remap_tables_vaddr = kernel_map_end;
+            let remap_tables_paddr = bmm
+                .allocate_pages(1, PageSize::Large)
+                .expect("Initial bmm fail")
+                .base
+                .addr();
             unsafe {
                 insert_unsafe_cell_ent(
                     &KERNEL_PD_TABLE,
                     Level::PD,
-                    ent_addr,
+                    page_tables_paddr,
                     DEFAULT_PAGE_TABLE_FLAGS,
-                    page_table_pd_start,
+                    page_tables_vaddr,
                 )
             };
 
-            // cur_pdpt_vaddr is incremented immediately in the first iteration of the loop
-            let mut cur_remap_table_vaddr = page_table_pd_start - PageSize::Small.usize();
+            // cur_remap_table_addrs are incremented immediately in the first iteration of
+            // the loop. So subtract one small page off to compensate.
+            let mut cur_remap_table_vaddr = remap_tables_vaddr - PageSize::Small.usize();
+            let mut cur_remap_table_paddr = remap_tables_paddr - PageSize::Small.usize();
+
             let remap_start = Addr::<PhysicalRemapSpace>::new(PhysicalRemapSpace::RANGE.start);
-            let remap_max_size = usize::min(
-                bmm.managed_range().size,
-                PhysicalRemapSpace::RANGE.end - PhysicalRemapSpace::RANGE.start,
-            );
+            let remap_max_size = PhysicalRemapSpace::RANGE.end - PhysicalRemapSpace::RANGE.start;
             let mut remap_vaddr_offset: usize = 0;
 
             // PhysicalRemapSpace are huge pages.
-            while remap_vaddr_offset + PageSize::Huge.usize() <= remap_max_size {
+            while remap_vaddr_offset < remap_max_size {
                 let cur_remap_vaddr = remap_start + remap_vaddr_offset;
 
                 let pml4_ref = unsafe { PML4_TABLE.get().as_mut_unchecked() };
@@ -154,20 +156,8 @@ impl MemoryManager for X86_64MemoryManager {
                 let mut pml4_ent = pml4_ref.index_with_vaddr(cur_remap_vaddr);
                 if !pml4_ent.is_present() {
                     cur_remap_table_vaddr = cur_remap_table_vaddr + PageSize::Small.usize();
-                    let cur_remap_table_paddr = bmm
-                        .allocate_pages(1, PageSize::Small)
-                        .expect("Direct remap alloc fail")
-                        .base
-                        .addr();
-                    unsafe {
-                        insert_unsafe_cell_ent(
-                            &LINEAR_PAGE_TABLE,
-                            Level::PT,
-                            cur_remap_table_paddr,
-                            KERNEL_PAGE_FLAGS,
-                            cur_remap_table_vaddr,
-                        )
-                    };
+                    cur_remap_table_paddr = cur_remap_table_paddr + PageSize::Small.usize();
+
                     unsafe {
                         pml4_ent.reinit(
                             cur_remap_table_paddr,
@@ -192,6 +182,18 @@ impl MemoryManager for X86_64MemoryManager {
                 };
 
                 remap_vaddr_offset = remap_vaddr_offset + PageSize::Huge.usize();
+            }
+
+            // Initializing rest of the page tables.
+            let mut cur_table_addr = cur_remap_table_paddr;
+            let pml4_ref = unsafe { PML4_TABLE.get().as_mut_unchecked() };
+            let pml4_ref = unsafe { TableRef::from_raw(Level::PML4, pml4_ref) };
+            for ent in &mut pml4_ref.entries()[256..] {
+                let ent = unsafe { EntryRef::from_raw(ent, Level::PML4) };
+                if !ent.is_present() {
+                    cur_table_addr = cur_table_addr + PageSize::Small.usize();
+                    unsafe { ent.reinit(cur_table_addr, DEFAULT_PAGE_TABLE_FLAGS) };
+                }
             }
         }
 
