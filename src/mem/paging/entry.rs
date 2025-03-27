@@ -17,7 +17,7 @@ impl RawEntry {
 }
 
 
-/// A paging table entry.
+/// A mutable reference to paging table entry with metadata.
 #[derive(Debug)]
 pub struct EntryRef<'a> {
     level: Level,
@@ -178,7 +178,7 @@ impl<'a> EntryRef<'a> {
         unsafe { new.reinit(addr, flags) }.map(|_| new)
     }
 
-    /// Initialize a new `RawEntry` with given flags at `addr`, and return an
+    /// Initializes a new `RawEntry` with given flags at `addr`, and return an
     /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
     ///
     /// # Safety
@@ -211,6 +211,9 @@ impl<'a> EntryRef<'a> {
         self.raw.0 = data;
         unsafe { self.set_addr(addr) }.then_some(())
     }
+
+    /// Uninitializes the `RawEntry`.
+    pub fn uninit(&mut self) { *self.raw = RawEntry::default(); }
 }
 
 /// Reference target of a paging table entry

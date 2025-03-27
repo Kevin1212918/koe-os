@@ -16,11 +16,11 @@ use crate::mem::paging::MemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
 use crate::mem::{kernel_end_lma, UMASpace};
 
-pub fn init(memory_areas: &[MemoryArea]) -> Pin<&mut MemblockSystem> {
+pub fn init(memory_areas: &[MemoryArea]) -> &'static mut MemblockSystem {
     // SAFETY: BMM is not accessed elsewhere in the module, and init is called
     // only once.
     let bmm = unsafe { BMM.get().as_mut_unchecked() };
-    MemblockSystem::init_pinned(Pin::static_mut(bmm), memory_areas)
+    MemblockSystem::init(bmm, memory_areas)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,12 +188,13 @@ pub struct MemblockSystem {
     partial_block: Option<Memblock>,
     offset: usize,
     managed_range: AddrRange<UMASpace>,
+    is_frozen: bool,
 }
 impl MemblockSystem {
-    pub fn init_pinned<'s, 'm, T>(
-        mut slot: Pin<&'s mut MaybeUninit<MemblockSystem>>,
+    pub fn init<'s, 'm, T>(
+        mut slot: &'s mut MaybeUninit<MemblockSystem>,
         memory: &'m [T],
-    ) -> Pin<&'s mut MemblockSystem>
+    ) -> &'s mut MemblockSystem
     where
         Memblock: for<'a> From<&'a T>,
     {
@@ -257,13 +258,16 @@ impl MemblockSystem {
         unsafe { (&raw mut ((*tbi).offset)).write(offset) };
         // SAFETY: Initializing managed_range
         unsafe { (&raw mut ((*tbi).managed_range)).write(managed_range) };
+        // SAFETY: Initializing is_frozen
+        unsafe { (&raw mut ((*tbi).is_frozen)).write(false) };
 
         // SAFETY: slot.map_unchecked_mut returns reference to an union variant
         // of the pinned value. tbi is initialized from above.
-        unsafe { slot.map_unchecked_mut(|tbi| tbi.assume_init_mut()) }
+        unsafe { slot.assume_init_mut() }
     }
 
     pub fn reserve(&mut self, layout: Layout) -> Option<Addr<UMASpace>> {
+        assert!(!self.is_frozen);
         let partial_block = &mut self.partial_block?;
         self.offset = self.offset.next_multiple_of(layout.align());
         let base = self.offset;
@@ -281,8 +285,9 @@ impl MemblockSystem {
 
     /// Split the partial block into a free and a reserved block and insert
     /// into the respective [`Memblocks`]. The `MemblockSystem` should not
-    /// be modified after.
+    /// be modified after freeze.
     pub fn freeze(&mut self) {
+        assert!(!self.is_frozen);
         let Some(partial_block) = self.partial_block.take() else {
             return;
         };
@@ -343,73 +348,5 @@ impl Iterator for AlignedSplit {
         };
         self.offset += next_size;
         Some(next)
-    }
-}
-
-
-
-//------------------- arch ------------------------
-
-impl PageManager<UMASpace> for MemblockSystem {
-    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
-        let layout = Layout::from_size_align(
-            cnt * page_size.usize(),
-            page_size.align(),
-        )
-        .expect("Layout for a page range should be valid");
-        let addr = self.reserve(layout)?;
-        Some(PageRange {
-            base: PageAddr::new(addr, page_size),
-            len: cnt,
-        })
-    }
-
-    unsafe fn deallocate_pages(&mut self, _pages: PageRange<UMASpace>) {
-        unimplemented!("MemblockAllocator cannot deallocate");
-    }
-}
-
-pub struct MemblockAllocator<'b> {
-    memblock: spin::Mutex<&'b mut MemblockSystem>,
-    high_mark: AtomicUsize,
-}
-impl<'b> MemblockAllocator<'b> {
-    /// Create a `MemblockAllocator`
-    ///
-    /// # Safety
-    /// PhysicalRemapSpace should be mapped.
-    pub unsafe fn new<U>(memblock: &'b mut MemblockSystem) -> Self
-    where
-        Memblock: for<'a> From<&'a U>,
-    {
-        let high_mark = AtomicUsize::new(0);
-        Self {
-            memblock: spin::Mutex::new(memblock),
-            high_mark,
-        }
-    }
-
-    pub fn managed_range(&self) -> AddrRange<UMASpace> {
-        self.memblock.lock().managed_range.clone()
-    }
-}
-
-unsafe impl<'b> Allocator for MemblockAllocator<'b> {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        use core::sync::atomic::Ordering;
-
-        let paddr = self.memblock.lock().reserve(layout).ok_or(AllocError)?;
-        let vaddr = PhysicalRemapSpace::p2v(paddr);
-        assert!(paddr.usize() >= self.high_mark.load(Ordering::Relaxed));
-
-        let ptr = NonNull::new(vaddr.into_ptr::<u8>().cast()).ok_or(AllocError)?;
-        Ok(NonNull::slice_from_raw_parts(
-            ptr,
-            layout.size(),
-        ))
-    }
-
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
-        unimplemented!("MemblockAllocator cannot deallocate");
     }
 }

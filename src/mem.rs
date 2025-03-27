@@ -7,19 +7,21 @@ use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use paging::{Flag, MemoryManager, MMU};
+use paging::{Flag, MemoryManager, X86_64MemoryManager, MMU};
 use phy::PMM;
 use virt::{KernelSpace, LowSpace, PhysicalRemapSpace};
 
 
 mod addr;
-pub mod alloc;
+mod alloc;
 mod paging;
 mod phy;
 mod virt;
 
+pub use alloc::{GlobalAllocator, PageAllocator};
+
 pub use addr::PageSize;
-pub use phy::UMASpace;
+pub use phy::{FrameManager, UMASpace};
 
 use crate::common::{hlt, Privilege};
 
@@ -38,7 +40,9 @@ pub fn init(boot_info: BootInformation) {
         .memory_map_tag()
         .expect("Currently does not support uefi memory map");
     init_gdtr();
-    phy::init(memory_info.memory_areas());
+    let bmm = phy::init_boot_mem(memory_info.memory_areas());
+    MMU.call_once(|| X86_64MemoryManager::init(&bmm));
+    phy::init(bmm);
 }
 
 

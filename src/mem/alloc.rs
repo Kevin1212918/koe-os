@@ -3,8 +3,9 @@ use core::ptr::{self, NonNull};
 
 use slab::SlabAllocator;
 
-use super::addr::{PageManager, PageSize};
+use super::addr::{PageAddr, PageManager, PageSize};
 use super::paging::{Flag, MemoryManager};
+use super::phy::PhySpace;
 use super::virt::VirtSpace;
 use super::UMASpace;
 

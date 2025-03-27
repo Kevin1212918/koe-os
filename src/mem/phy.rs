@@ -1,5 +1,6 @@
 use alloc::alloc::Allocator;
-use core::alloc::Layout;
+use core::alloc::{AllocError, Layout};
+use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::ops::Range;
 use core::pin::Pin;
@@ -7,7 +8,7 @@ use core::ptr::NonNull;
 use core::usize;
 
 use buddy::{BuddySystem, BUDDY_MAX_ORDER};
-use memblock::{MemblockAllocator, MemblockSystem};
+use memblock::MemblockSystem;
 use multiboot2::{BootInformation, MemoryArea, MemoryAreaTypeId};
 
 use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
@@ -21,44 +22,21 @@ use crate::mem::{kernel_end_lma, paging};
 mod buddy;
 mod memblock;
 
-pub fn init(memory_areas: &[MemoryArea]) {
-    let mut memblock = memblock::init(memory_areas);
-    let managed_range = memblock.managed_range().clone();
-    init_remap(memblock.as_mut().get_mut());
+pub fn init_boot_mem(memory_areas: &[MemoryArea]) -> BootMemoryManager {
+    BootMemoryManager(RefCell::new(memblock::init(
+        memory_areas,
+    )))
+}
+pub fn init(mut bmm: BootMemoryManager) {
+    let managed_range = bmm.0.get_mut().managed_range().clone();
 
     // init PMM
     PMM.call_once(|| {
         // SAFETY: PhysicalRemap was mapped.
-        let pmm = unsafe { PhysicalMemoryManager::new(managed_range, memblock.get_mut()) };
+        let pmm = unsafe { PhysicalMemoryManager::new(&bmm) };
         spin::Mutex::new(pmm)
     });
 }
-
-fn init_remap(memblock: &mut MemblockSystem) {
-    use paging::Flag;
-    let managed_range = memblock.managed_range();
-    let managed_pages = managed_range.overlapped_pages(PageSize::Huge);
-    const PHYSICAL_REMAP_FLAGS: [Flag; 4] =
-        [Flag::Present, Flag::Global, Flag::ReadWrite, Flag::PageSize];
-
-    for ppage in managed_pages {
-        let vpage = PageAddr::new(
-            PhysicalRemapSpace::p2v(ppage.start()),
-            ppage.page_size(),
-        );
-        unsafe {
-            MMU.map(
-                vpage,
-                ppage,
-                PHYSICAL_REMAP_FLAGS,
-                memblock,
-            )
-            .expect("PhysicalRemap flags should be valid");
-        }
-    }
-}
-
-
 
 pub trait PhySpace: AddrSpace {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,34 +71,33 @@ impl Frame {
     }
 }
 
-
-pub static PMM: spin::Once<spin::Mutex<PhysicalMemoryManager>> = spin::Once::new();
+static PMM: spin::Once<spin::Mutex<PhysicalMemoryManager>> = spin::Once::new();
 pub const FRAME_ORDER: u8 = PageSize::MIN.order();
 pub const FRAME_SIZE: usize = PageSize::MIN.usize();
 
-pub struct PhysicalMemoryManager {
+struct PhysicalMemoryManager {
     frames: &'static mut [Frame],
     base: PageAddr<UMASpace>,
     buddy: BuddySystem,
 }
 impl PhysicalMemoryManager {
-    /// Create a [`PhysicalMemoryManager`] for [`UMASpace`]
+    /// Create a [`PhysicalMemoryManager`] for [`UMASpace`].
+    ///
+    /// `PhysicalMemoryManager` inherits all the records from `bmm`.
+    /// Consequently, this function freezes `bmm`.
     ///
     /// Since `PhysicalMemoryManager` does not track its own memory,
     /// its backing memory is leaked.
     ///
     /// # Safety
     /// PhysicalRemapSpace should be mapped.
-    unsafe fn new(
-        managed_range: AddrRange<UMASpace>,
-        memblock_system: &mut MemblockSystem,
-    ) -> Self {
+    unsafe fn new(bmm: &BootMemoryManager) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
-        let boot_alloc = unsafe { MemblockAllocator::new(memblock_system) };
+        let managed_range = bmm.0.borrow().managed_range();
         let managed_pages = managed_range.overlapped_pages(PageSize::Small);
         let frames_layout = Layout::array::<Frame>(managed_pages.len)
             .expect("Frame layout should not be too large");
-        let frames_ptr = boot_alloc
+        let frames_ptr = bmm
             .allocate(frames_layout)
             .expect("Boot allocation should succeed");
         let mut frames_ptr = NonNull::slice_from_raw_parts(frames_ptr.cast(), managed_pages.len);
@@ -129,9 +106,10 @@ impl PhysicalMemoryManager {
         let frames = unsafe { frames_ptr.as_mut() };
         let base = managed_pages.base;
         let mut buddy =
-            BuddySystem::new(frames.len(), boot_alloc).expect("Boot Allocator should not fail.");
+            BuddySystem::new(frames.len(), bmm).expect("Boot Allocator should not fail.");
 
-        memblock_system.freeze();
+        bmm.0.borrow_mut().freeze();
+        let memblock_system = bmm.0.borrow();
         let free_blocks = memblock_system.free_blocks();
         for free_block in free_blocks {
             for aligned in free_block.aligned_split(
@@ -156,24 +134,6 @@ impl PhysicalMemoryManager {
         }
     }
 
-    fn frame(&self, addr: impl Into<Addr<UMASpace>>) -> Option<&Frame> {
-        self.frame_idx(addr.into()).map(|idx| &self.frames[idx])
-    }
-
-    fn frame_mut(&mut self, addr: impl Into<Addr<UMASpace>>) -> Option<&mut Frame> {
-        self.frame_idx(addr.into()).map(|idx| &mut self.frames[idx])
-    }
-
-    fn frame_idx(&self, addr: Addr<UMASpace>) -> Option<usize> {
-        let byte_offset: usize = (addr - self.base.addr()).try_into().ok()?;
-        let idx = byte_offset >> FRAME_ORDER;
-        (idx < self.frames.len()).then_some(idx)
-    }
-
-    const fn frames_ptr(&self) -> *const Frame { &raw const self.frames[0] }
-}
-
-impl PageManager<UMASpace> for PhysicalMemoryManager {
     fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
         let frame_cnt = cnt * (page_size.usize() / FRAME_SIZE);
         let allocate_cnt = frame_cnt.next_power_of_two();
@@ -206,60 +166,83 @@ impl PageManager<UMASpace> for PhysicalMemoryManager {
         }
         self.frames[frame_idx].order = 0;
     }
-}
 
-// ------------ arch ----------------
-
-
-// ---------------------- misc ---------------------
-/// Find the initial free memory areas.
-///
-/// Note this only considers the memory usage before `kmain` is called.
-fn initial_free_memory_areas<'boot>(
-    boot_info: &'boot BootInformation,
-) -> impl Iterator<Item = AddrRange<UMASpace>> + 'boot {
-    let mbi_range = {
-        let start = Addr::new(boot_info.start_address());
-        let end = Addr::new(boot_info.end_address());
-        AddrRange::from(start..end)
-    };
-    let memory_areas = boot_info
-        .memory_map_tag()
-        .expect("BootInformation should include memory map")
-        .memory_areas();
-
-    let available: MemoryAreaTypeId = multiboot2::MemoryAreaType::Available.into();
-    let kernel_area: AddrRange<UMASpace> = (kernel_start_lma()..kernel_end_lma()).into();
-    memory_areas
-        .iter()
-        .filter(move |area| area.typ() == available)
-        .map(|area| unsafe {
-            let start = Addr::new(area.start_address() as usize);
-            let end = Addr::new(area.end_address() as usize);
-            AddrRange::from(start..end)
-        })
-        .flat_map(move |range| range.range_sub(kernel_area.clone()))
-        .filter(|x| !x.is_empty())
-        .flat_map(move |range| range.range_sub(mbi_range.clone()))
-        .filter(|x| !x.is_empty())
-}
-
-/// Find the initial range of available physical memory
-fn initial_memory_range(boot_info: &BootInformation) -> Range<Addr<UMASpace>> {
-    let memory_areas = boot_info
-        .memory_map_tag()
-        .expect("BootInformation should include memory map")
-        .memory_areas();
-
-    let (mut min, mut max) = (usize::MAX, 0);
-    for area in memory_areas {
-        min = usize::min(area.start_address() as usize, min);
-        max = usize::max(area.end_address() as usize, max);
+    fn frame(&self, addr: impl Into<Addr<UMASpace>>) -> Option<&Frame> {
+        self.frame_idx(addr.into()).map(|idx| &self.frames[idx])
     }
-    assert!(
-        min < max,
-        "BootInformation memory map should not be empty"
-    );
 
-    unsafe { Addr::new(min)..Addr::new(max + 1) }
+    fn frame_mut(&mut self, addr: impl Into<Addr<UMASpace>>) -> Option<&mut Frame> {
+        self.frame_idx(addr.into()).map(|idx| &mut self.frames[idx])
+    }
+
+    fn frame_idx(&self, addr: Addr<UMASpace>) -> Option<usize> {
+        let byte_offset: usize = (addr - self.base.addr()).try_into().ok()?;
+        let idx = byte_offset >> FRAME_ORDER;
+        (idx < self.frames.len()).then_some(idx)
+    }
+
+    const fn frames_ptr(&self) -> *const Frame { &raw const self.frames[0] }
+}
+
+pub struct FrameManager;
+impl PageManager<UMASpace> for FrameManager {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
+        PMM.get()?.lock().allocate_pages(cnt, page_size)
+    }
+
+    unsafe fn deallocate_pages(&self, pages: PageRange<UMASpace>) {
+        unsafe {
+            PMM.get()
+                .expect("Deallocating unallocated frame")
+                .lock()
+                .deallocate_pages(pages);
+        }
+    }
+}
+
+pub struct BootMemoryManager(RefCell<&'static mut MemblockSystem>);
+impl BootMemoryManager {
+    pub fn managed_range(&self) -> AddrRange<UMASpace> { self.0.borrow().managed_range() }
+}
+impl PageManager<UMASpace> for BootMemoryManager {
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
+        let layout = Layout::from_size_align(
+            cnt * page_size.usize(),
+            page_size.align(),
+        )
+        .expect("Layout for a page range should be valid");
+        let addr = self.0.try_borrow_mut().ok()?.reserve(layout)?;
+        Some(PageRange {
+            base: PageAddr::new(addr, page_size),
+            len: cnt,
+        })
+    }
+
+    unsafe fn deallocate_pages(&self, _pages: PageRange<UMASpace>) {
+        unimplemented!("BootMemoryManager cannot deallocate");
+    }
+}
+unsafe impl Allocator for BootMemoryManager {
+    /// # Note
+    ///
+    /// This should not be used before `PhysicalRemapSpace` is initialized.
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let paddr = self
+            .0
+            .try_borrow_mut()
+            .map_err(|_| AllocError)?
+            .reserve(layout)
+            .ok_or(AllocError)?;
+        let vaddr = PhysicalRemapSpace::p2v(paddr);
+
+        let ptr = NonNull::new(vaddr.into_ptr::<u8>().cast()).ok_or(AllocError)?;
+        Ok(NonNull::slice_from_raw_parts(
+            ptr,
+            layout.size(),
+        ))
+    }
+
+    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
+        unimplemented!("MemblockAllocator cannot deallocate");
+    }
 }

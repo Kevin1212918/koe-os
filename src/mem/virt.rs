@@ -4,7 +4,7 @@
 //! | Address                             | Description               | Size  |
 //! |:------------------------------------|--------------------------:|:-----:|
 //! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Remap      | 64 TB |
-//! |0xFFFFC90000000000:0xFFFFE90000000000|Kernel Heap                | 32 TB |
+//! |0xFFFFC90000000000:0xFFFFE90000000000|Data Stack                 | 32 TB |
 //! |0xFFFFFE8000000000:0xFFFFFF0000000000|Recursive Paging           | 0.5TB |
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
@@ -55,6 +55,14 @@ impl VirtSpace for PhysicalRemapSpace {}
 impl AddrSpace for PhysicalRemapSpace {
     const RANGE: Range<usize> = 0xFFFF_8880_0000_0000..0xFFFF_C880_0000_0000;
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DataStackSpace;
+impl VirtSpace for DataStackSpace {}
+impl AddrSpace for DataStackSpace {
+    const RANGE: Range<usize> = 0xFFFF_C900_0000_0000..0xFFFF_E900_0000_0000;
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecursivePagingSpace;

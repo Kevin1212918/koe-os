@@ -35,14 +35,7 @@ impl<'a> TableRef<'a> {
         unsafe { EntryRef::from_raw(raw_entry, self.level) }
     }
 
-    pub fn index(self, idx: usize) -> EntryRef<'a> {
-        let raw_entry = self
-            .data
-            .0
-            .get_mut(idx)
-            .expect("TableRef index out of bound");
-        unsafe { EntryRef::from_raw(raw_entry, self.level) }
-    }
+    pub fn entries(self) -> &'a mut [RawEntry] { &mut self.data.0 }
 
     pub fn reborrow<'b>(&'b mut self) -> TableRef<'b>
     where
@@ -53,4 +46,7 @@ impl<'a> TableRef<'a> {
             data: &mut self.data,
         }
     }
+}
+impl<'a> Into<&'a mut RawTable> for TableRef<'a> {
+    fn into(self) -> &'a mut RawTable { self.data }
 }

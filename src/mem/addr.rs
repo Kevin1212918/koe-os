@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 use core::marker::PhantomData;
-use core::ops::{Add, DerefMut, Range, Sub};
+use core::ops::{Add, Deref, DerefMut, Range, Sub};
 
 use derive_more::derive::Into;
 
@@ -380,7 +380,7 @@ pub trait PageManager<S: AddrSpace> {
     ///
     /// It is guarenteed that an allocated page will not be allocated again for
     /// the duration of the program.
-    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
 
     // /// Allocates contiguous `cnt` of `page_size`-sized pages which starts
     // /// at `at`. If the `cnt` pages starting at `at` is not available to
@@ -392,19 +392,19 @@ pub trait PageManager<S: AddrSpace> {
     ///
     /// # Safety
     /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate_pages(&mut self, pages: PageRange<S>);
+    unsafe fn deallocate_pages(&self, pages: PageRange<S>);
 }
 impl<S: AddrSpace, P, T> PageManager<S> for T
 where
     P: PageManager<S>,
-    T: DerefMut<Target = P>,
+    T: Deref<Target = P>,
 {
-    fn allocate_pages(&mut self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>> {
-        self.deref_mut().allocate_pages(cnt, page_size)
+    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>> {
+        self.deref().allocate_pages(cnt, page_size)
     }
 
-    unsafe fn deallocate_pages(&mut self, pages: PageRange<S>) {
-        unsafe { self.deref_mut().deallocate_pages(pages) }
+    unsafe fn deallocate_pages(&self, pages: PageRange<S>) {
+        unsafe { self.deref().deallocate_pages(pages) }
     }
 }
 
