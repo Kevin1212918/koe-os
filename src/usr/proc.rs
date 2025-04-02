@@ -1,1 +1,1 @@
-pub type Pid: u32;
+pub type Pid = u32;

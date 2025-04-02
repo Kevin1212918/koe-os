@@ -1,4 +1,3 @@
-use alloc::PageAllocator;
 use core::arch::asm;
 use core::ops::Range;
 
@@ -8,8 +7,7 @@ use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
 use paging::{Flag, MemoryManager, X86_64MemoryManager, MMU};
-use phy::PMM;
-use virt::{KernelSpace, LowSpace, PhysicalRemapSpace};
+use virt::{KernelImageSpace, PhysicalRemapSpace};
 
 
 mod addr;
@@ -21,7 +19,7 @@ mod virt;
 pub use alloc::{GlobalAllocator, PageAllocator};
 
 pub use addr::PageSize;
-pub use phy::{FrameManager, UMASpace};
+pub use phy::UMASpace;
 
 use crate::common::{hlt, Privilege};
 
@@ -47,12 +45,12 @@ pub fn init(boot_info: BootInformation) {
 
 
 pub const fn kernel_offset_vma() -> usize { KERNEL_OFFSET_VMA }
-pub fn kernel_start_vma() -> Addr<KernelSpace> {
+pub fn kernel_start_vma() -> Addr<KernelImageSpace> {
     // SAFETY: _KERNEL_START_VMA is on symbol table created by linker. The
     // address of the symbol is the virtual memory address of kernel.
     Addr::from_ref(unsafe { &_KERNEL_START_VMA })
 }
-pub fn kernel_end_vma() -> Addr<KernelSpace> {
+pub fn kernel_end_vma() -> Addr<KernelImageSpace> {
     // SAFETY: _KERNEL_END_VMA is on symbol table created by linker. The
     // address of the symbol is the virtual memory address of kernel.
     Addr::from_ref(unsafe { &_KERNEL_END_VMA })
@@ -70,7 +68,7 @@ pub fn kernel_size() -> usize {
         .try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
-pub unsafe fn kernel_v2p(addr: Addr<KernelSpace>) -> Addr<UMASpace> {
+pub unsafe fn kernel_v2p(addr: Addr<KernelImageSpace>) -> Addr<UMASpace> {
     Addr::new(addr.usize() - KERNEL_OFFSET_VMA)
 }
 pub fn p2v(addr: Addr<UMASpace>) -> Addr<PhysicalRemapSpace> {

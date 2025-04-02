@@ -36,7 +36,7 @@ impl<'a> EntryRef<'a> {
 
     pub fn level(&self) -> Level { self.level }
 
-    pub fn into_raw(self) -> &'a mut RawEntry { self.raw }
+    pub fn raw(self) -> &'a mut RawEntry { self.raw }
 
     /// Get the referenced target for `Entry`
     pub fn target(&self) -> EntryTarget {

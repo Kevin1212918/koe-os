@@ -15,26 +15,22 @@ use super::addr::{Addr, AddrSpace, PageRange};
 use super::UMASpace;
 use crate::mem::phy;
 
-pub trait VirtSpace: AddrSpace {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LowSpace;
-impl VirtSpace for LowSpace {}
-impl AddrSpace for LowSpace {
-    const RANGE: Range<usize> = 0x20_0000..0x40_0000;
+pub trait VirtSpace: AddrSpace {
+    fn is_kernel_space() -> bool { Self::RANGE.start >= 0xFFFF_8000_0000_0000 }
 }
-
+pub trait KernelSpace: VirtSpace {}
+impl<S: KernelSpace> VirtSpace for S {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct KernelSpace;
-impl KernelSpace {
+pub struct KernelImageSpace;
+impl KernelImageSpace {
     pub fn v2p(vaddr: Addr<Self>) -> Addr<phy::UMASpace> {
         assert!(Self::RANGE.contains(&vaddr.usize()));
         Addr::new(vaddr.usize() - Self::RANGE.start)
     }
 }
-impl VirtSpace for KernelSpace {}
-impl AddrSpace for KernelSpace {
+impl KernelSpace for KernelImageSpace {}
+impl AddrSpace for KernelImageSpace {
     const RANGE: Range<usize> = 0xFFFF_FFFF_8000_0000..0xFFFF_FFFF_FF60_0000;
 }
 
@@ -51,41 +47,21 @@ impl PhysicalRemapSpace {
         Addr::new(vaddr.usize() - Self::OFFSET)
     }
 }
-impl VirtSpace for PhysicalRemapSpace {}
+impl KernelSpace for PhysicalRemapSpace {}
 impl AddrSpace for PhysicalRemapSpace {
     const RANGE: Range<usize> = 0xFFFF_8880_0000_0000..0xFFFF_C880_0000_0000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DataStackSpace;
-impl VirtSpace for DataStackSpace {}
+impl KernelSpace for DataStackSpace {}
 impl AddrSpace for DataStackSpace {
     const RANGE: Range<usize> = 0xFFFF_C900_0000_0000..0xFFFF_E900_0000_0000;
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecursivePagingSpace;
-impl VirtSpace for RecursivePagingSpace {}
+impl KernelSpace for RecursivePagingSpace {}
 impl AddrSpace for RecursivePagingSpace {
     const RANGE: Range<usize> = 0xFFFF_FE80_0000_0000..0xFFFF_FF00_0000_0000;
-}
-
-struct VirtMemoryArea<S: VirtSpace> {
-    range: PageRange<S>,
-    flag: u8,
-}
-impl<S: VirtSpace> PartialEq for VirtMemoryArea<S> {
-    fn eq(&self, other: &Self) -> bool { self.range.base.addr() == other.range.base.addr() }
-}
-impl<S: VirtSpace> Eq for VirtMemoryArea<S> {}
-impl<S: VirtSpace> PartialOrd for VirtMemoryArea<S> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.range.base.addr().partial_cmp(&other.range.base.addr())
-    }
-}
-impl<S: VirtSpace> Ord for VirtMemoryArea<S> {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.range.base.addr().cmp(&other.range.base.addr())
-    }
 }

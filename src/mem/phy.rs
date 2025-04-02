@@ -15,7 +15,7 @@ use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
 use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
-use crate::common::TiB;
+use crate::common::{hlt, TiB};
 use crate::mem::addr::AddrRange;
 use crate::mem::{kernel_end_lma, paging};
 
@@ -28,12 +28,10 @@ pub fn init_boot_mem(memory_areas: &[MemoryArea]) -> BootMemoryManager {
     )))
 }
 pub fn init(mut bmm: BootMemoryManager) {
-    let managed_range = bmm.0.get_mut().managed_range().clone();
-
     // init PMM
     PMM.call_once(|| {
         // SAFETY: PhysicalRemap was mapped.
-        let pmm = unsafe { PhysicalMemoryManager::new(&bmm) };
+        let pmm = unsafe { PhysicalMemoryRecord::new(&bmm) };
         spin::Mutex::new(pmm)
     });
 }
@@ -71,22 +69,23 @@ impl Frame {
     }
 }
 
-static PMM: spin::Once<spin::Mutex<PhysicalMemoryManager>> = spin::Once::new();
+static PMM: spin::Once<spin::Mutex<PhysicalMemoryRecord>> = spin::Once::new();
 pub const FRAME_ORDER: u8 = PageSize::MIN.order();
 pub const FRAME_SIZE: usize = PageSize::MIN.usize();
 
-struct PhysicalMemoryManager {
+struct PhysicalMemoryRecord {
     frames: &'static mut [Frame],
     base: PageAddr<UMASpace>,
     buddy: BuddySystem,
 }
-impl PhysicalMemoryManager {
-    /// Create a [`PhysicalMemoryManager`] for [`UMASpace`].
+
+impl PhysicalMemoryRecord {
+    /// Create a [`PhysicalMemoryRecord`] for [`UMASpace`].
     ///
-    /// `PhysicalMemoryManager` inherits all the records from `bmm`.
+    /// `PhysicalMemoryRecord` inherits all the records from `bmm`.
     /// Consequently, this function freezes `bmm`.
     ///
-    /// Since `PhysicalMemoryManager` does not track its own memory,
+    /// Since `PhysicalMemoryRecord` does not track its own memory,
     /// its backing memory is leaked.
     ///
     /// # Safety
@@ -184,10 +183,17 @@ impl PhysicalMemoryManager {
     const fn frames_ptr(&self) -> *const Frame { &raw const self.frames[0] }
 }
 
-pub struct FrameManager;
-impl PageManager<UMASpace> for FrameManager {
+pub struct PhysicalMemoryManager;
+impl PageManager<UMASpace> for PhysicalMemoryManager {
     fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
-        PMM.get()?.lock().allocate_pages(cnt, page_size)
+        debug_assert!(
+            PMM.get().is_some(),
+            "PhysicalMemoryRecord should be initialized"
+        );
+        // NOTE: Not safe!
+        unsafe { PMM.get_unchecked() }
+            .lock()
+            .allocate_pages(cnt, page_size)
     }
 
     unsafe fn deallocate_pages(&self, pages: PageRange<UMASpace>) {

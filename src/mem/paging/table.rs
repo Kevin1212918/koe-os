@@ -23,6 +23,8 @@ pub struct TableRef<'a> {
 }
 
 impl<'a> TableRef<'a> {
+    pub fn raw(self) -> &'a mut RawTable { self.data }
+
     pub unsafe fn from_raw(level: Level, data: &'a mut RawTable) -> Self { Self { level, data } }
 
     /// For a `Table` of the given `typ`, get the `PageEntry` indexed by
@@ -30,12 +32,20 @@ impl<'a> TableRef<'a> {
     pub fn index_with_vaddr<S: VirtSpace>(self, addr: Addr<S>) -> EntryRef<'a> {
         let idx_range = self.level.page_table_idx_range();
         let idx = addr.index_range(&idx_range);
+        self.index(idx)
+    }
+    pub fn index(self, idx: usize) -> EntryRef<'a> {
         debug_assert!(idx < self.data.0.len());
         let raw_entry = unsafe { self.data.0.get_unchecked_mut(idx) };
         unsafe { EntryRef::from_raw(raw_entry, self.level) }
     }
-
-    pub fn entries(self) -> &'a mut [RawEntry] { &mut self.data.0 }
+    pub fn entry_refs(self) -> impl IntoIterator<Item = EntryRef<'a>> {
+        let level = self.level;
+        self.data
+            .0
+            .iter_mut()
+            .map(move |x| unsafe { EntryRef::from_raw(x, level) })
+    }
 
     pub fn reborrow<'b>(&'b mut self) -> TableRef<'b>
     where

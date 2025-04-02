@@ -6,7 +6,7 @@ use core::ptr::NonNull;
 
 use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageManager, PageRange, PageSize};
 use crate::mem::alloc::{allocate_if_zst, deallocate_if_zst};
-use crate::mem::phy::PMM;
+use crate::mem::phy::{PhysicalMemoryManager};
 use crate::mem::virt::PhysicalRemapSpace;
 
 // TODO: Auto huge page
@@ -30,9 +30,9 @@ unsafe impl Allocator for PageAllocator {
             .div(PageSize::MIN.usize());
         let page_size = PageSize::MIN;
 
-        let mut pmm = PMM.get().ok_or(AllocError)?.lock();
-
-        let prange = pmm.allocate_pages(page_cnt, page_size).ok_or(AllocError)?;
+        let prange = PhysicalMemoryManager
+            .allocate_pages(page_cnt, page_size)
+            .ok_or(AllocError)?;
         debug_assert!(prange.len >= page_cnt);
         debug_assert!(prange.page_size() >= page_size);
 
@@ -80,8 +80,7 @@ unsafe impl Allocator for PageAllocator {
         let prange = PageRange::try_from_range(prange, page_size)
             .expect("pbase and size should be page_aligned.");
 
-        let mut pmm = PMM.get().expect("PMM should have been initialized").lock();
-        unsafe { pmm.deallocate_pages(prange) };
+        unsafe { PhysicalMemoryManager.deallocate_pages(prange) };
     }
 }
 
@@ -91,7 +90,7 @@ unsafe impl Allocator for PageAllocator {
 /// For now, this will only allocate [`PageSize::MIN`] page.
 #[derive(Debug, Clone, Copy)]
 pub struct PhysicalPageManager;
-unsafe impl Allocator for PageAllocator {
+unsafe impl Allocator for PhysicalPageManager {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         if let Some(ptr) = allocate_if_zst(layout) {
             return Ok(ptr);
@@ -105,9 +104,9 @@ unsafe impl Allocator for PageAllocator {
             .div(PageSize::MIN.usize());
         let page_size = PageSize::MIN;
 
-        let mut pmm = PMM.get().ok_or(AllocError)?.lock();
-
-        let prange = pmm.allocate_pages(page_cnt, page_size).ok_or(AllocError)?;
+        let prange = PhysicalMemoryManager
+            .allocate_pages(page_cnt, page_size)
+            .ok_or(AllocError)?;
         debug_assert!(prange.len >= page_cnt);
         debug_assert!(prange.page_size() >= page_size);
 
@@ -155,7 +154,6 @@ unsafe impl Allocator for PageAllocator {
         let prange = PageRange::try_from_range(prange, page_size)
             .expect("pbase and size should be page_aligned.");
 
-        let mut pmm = PMM.get().expect("PMM should have been initialized").lock();
-        unsafe { pmm.deallocate_pages(prange) };
+        unsafe { PhysicalMemoryManager.deallocate_pages(prange) };
     }
 }
