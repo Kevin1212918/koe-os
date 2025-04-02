@@ -95,7 +95,7 @@ pub struct X86_64MemoryManager(spin::Mutex<X86_64MemoryMap>);
 impl MemoryManager for X86_64MemoryManager {
     type Map = X86_64MemoryMap;
 
-    fn init(_bmm: &BootMemoryManager) -> Self {
+    fn init(bmm: &BootMemoryManager) -> Self {
         static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
         static PDPT_TABLES: SyncUnsafeCell<[RawTable; 256]> =
             SyncUnsafeCell::new([const { RawTable::default() }; 256]);
@@ -135,7 +135,6 @@ impl MemoryManager for X86_64MemoryManager {
             }
         }
 
-
         fn init_physical_remap_pdpt(pdpt_ref: TableRef<'_>, remap_idx: usize) {
             const REMAP_PAGE_FLAGS: [Flag; 4] =
                 [Flag::Present, Flag::PageSize, Flag::Global, Flag::ReadWrite];
@@ -164,7 +163,11 @@ impl MemoryManager for X86_64MemoryManager {
                 .index_range(&Level::PML4.page_table_idx_range());
             let remap_page_start = Addr::<PhysicalRemapSpace>::new(PhysicalRemapSpace::RANGE.start)
                 .index_range(&Level::PML4.page_table_idx_range());
-            let remap_page_end = Addr::<PhysicalRemapSpace>::new(PhysicalRemapSpace::RANGE.end - 1)
+            let remap_page_end = usize::min(
+                PhysicalRemapSpace::RANGE.end - 1,
+                PhysicalRemapSpace::RANGE.start + bmm.managed_range().size - 1,
+            );
+            let remap_page_end = Addr::<PhysicalRemapSpace>::new(remap_page_end)
                 .index_range(&Level::PML4.page_table_idx_range());
 
             if idx == kernel_page_idx {
