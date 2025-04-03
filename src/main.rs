@@ -25,10 +25,10 @@ mod boot;
 mod common;
 mod drivers;
 mod interrupt;
-mod usr;
 mod io;
 mod mem;
 mod test;
+mod usr;
 
 #[no_mangle]
 pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
@@ -57,4 +57,3 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     log!("\nkernel initialized\n");
     hlt()
 }
-

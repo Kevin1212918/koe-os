@@ -147,7 +147,6 @@ impl MemoryManager for X86_64MemoryManager {
             }
         }
 
-
         let pdpt_table_iter = unsafe {
             PDPT_TABLES
                 .get()
@@ -252,10 +251,10 @@ pub struct X86_64MemoryMap {
     cr3: RawEntry,
 }
 impl X86_64MemoryMap {
-    fn new(mmu: &mut X86_64MemoryManager) -> Self {
+    pub fn new(mmu: &X86_64MemoryManager) -> Self {
         let mut cr3 = RawEntry::default();
         let table_ptr = PageAllocator
-            .allocate(Layout::new::<RawTable>())
+            .allocate_zeroed(Layout::new::<RawTable>())
             .expect("Allocation failed!");
         let table_vaddr: Addr<PhysicalRemapSpace> =
             Addr::new(table_ptr.cast::<RawTable>().as_ptr() as usize);
@@ -274,15 +273,8 @@ impl X86_64MemoryMap {
         let cur_table: TableRef = cur_map.deref_mut().into();
         pml4_table_ref.raw().0[256..].copy_from_slice(&cur_table.raw().0[256..]);
 
-        let cr3_ref = unsafe {
-            EntryRef::init(
-                &mut cr3,
-                Level::CR3,
-                table_paddr,
-                DEFAULT_PAGE_TABLE_FLAGS,
-            )
-        }
-        .expect("Flags should be valid");
+        unsafe { EntryRef::init(&mut cr3, Level::CR3, table_paddr, []) }
+            .expect("Flags should be valid");
         Self { cr3 }
     }
 }
