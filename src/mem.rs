@@ -6,11 +6,11 @@ use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use paging::{Flag, MemoryManager, X86_64MemoryManager, X86_64MemoryMap, MMU};
+use paging::{Flag, MemoryManager, MMU};
 use virt::{KernelImageSpace, PhysicalRemapSpace};
 
 
-mod addr;
+pub mod addr;
 mod alloc;
 mod paging;
 mod phy;
@@ -18,13 +18,13 @@ mod virt;
 
 pub use alloc::{GlobalAllocator, PageAllocator};
 
-pub use addr::PageSize;
+pub use paging::{X86_64MemoryManager, X86_64MemoryMap};
 pub use phy::UMASpace;
 
 use crate::common::{hlt, Privilege};
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
-pub const REMAP_OFFSET: usize = const { PhysicalRemapSpace::OFFSET };
+
 
 extern "C" {
     static _KERNEL_START_VMA: u8;
@@ -67,13 +67,6 @@ pub fn kernel_size() -> usize {
         .addr_sub(kernel_start_vma())
         .try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
-}
-pub unsafe fn kernel_v2p(addr: Addr<KernelImageSpace>) -> Addr<UMASpace> {
-    Addr::new(addr.usize() - KERNEL_OFFSET_VMA)
-}
-pub fn p2v(addr: Addr<UMASpace>) -> Addr<PhysicalRemapSpace> {
-    let vaddr = addr.byte_add(PhysicalRemapSpace::OFFSET).usize();
-    Addr::new(vaddr)
 }
 
 // ------------ Segmentation stuff -------------

@@ -11,7 +11,7 @@ use buddy::{BuddySystem, BUDDY_MAX_ORDER};
 use memblock::MemblockSystem;
 use multiboot2::{BootInformation, MemoryArea, MemoryAreaTypeId};
 
-use super::addr::{Addr, AddrSpace, PageAddr, PageManager, PageRange, PageSize};
+use super::addr::{self, Addr, AddrSpace, PageAddr, PageRange, PageSize};
 use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
@@ -184,19 +184,15 @@ impl PhysicalMemoryRecord {
 }
 
 pub struct PhysicalMemoryManager;
-impl PageManager<UMASpace> for PhysicalMemoryManager {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
-        debug_assert!(
-            PMM.get().is_some(),
-            "PhysicalMemoryRecord should be initialized"
-        );
-        // NOTE: Not safe!
+impl PhysicalMemoryManager {
+    pub fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
+        // FIXME : Not safe!
         unsafe { PMM.get_unchecked() }
             .lock()
             .allocate_pages(cnt, page_size)
     }
 
-    unsafe fn deallocate_pages(&self, pages: PageRange<UMASpace>) {
+    pub unsafe fn deallocate_pages(&self, pages: PageRange<UMASpace>) {
         unsafe {
             PMM.get()
                 .expect("Deallocating unallocated frame")
@@ -205,29 +201,55 @@ impl PageManager<UMASpace> for PhysicalMemoryManager {
         }
     }
 }
+unsafe impl addr::Allocator<UMASpace> for PhysicalMemoryManager {
+    /// Attempt to allocate a page of physical memory that fits the layout. The
+    /// returned page is guarenteed to be the smallest page which fits the
+    /// layout.
+    ///
+    /// Use [`Self::allocate_pages`] to allocate pages directly.
+    fn allocate(&self, layout: Layout) -> Option<AddrRange<UMASpace>> {
+        debug_assert!(
+            PMM.get().is_some(),
+            "PhysicalMemoryRecord should be initialized"
+        );
+        let page = PageSize::fit(layout)?;
+        self.allocate_pages(1, page).map(|r| r.into())
+    }
+
+    /// Deallocated a page starting at `addr`.
+    ///
+    /// Use [`Self::deallocate_pages`] for deallocating pages from
+    /// `allocate_pages`.
+    unsafe fn deallocate(&self, addr: Addr<UMASpace>, layout: Layout) {
+        debug_assert!(
+            PMM.get().is_some(),
+            "PhysicalMemoryRecord should be initialized"
+        );
+        let page = PageSize::fit(layout).expect("layout should fit into an allocated page");
+        let alloc_range = PageRange {
+            base: PageAddr::new(addr, page),
+            len: 1,
+        };
+        unsafe { self.deallocate_pages(alloc_range) }
+    }
+}
 
 pub struct BootMemoryManager(RefCell<&'static mut MemblockSystem>);
 impl BootMemoryManager {
     pub fn managed_range(&self) -> AddrRange<UMASpace> { self.0.borrow().managed_range() }
 }
-impl PageManager<UMASpace> for BootMemoryManager {
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
-        let layout = Layout::from_size_align(
-            cnt * page_size.usize(),
-            page_size.align(),
-        )
-        .expect("Layout for a page range should be valid");
-        let addr = self.0.try_borrow_mut().ok()?.reserve(layout)?;
-        Some(PageRange {
-            base: PageAddr::new(addr, page_size),
-            len: cnt,
-        })
+unsafe impl addr::Allocator<UMASpace> for BootMemoryManager {
+    fn allocate(&self, layout: Layout) -> Option<AddrRange<UMASpace>> {
+        let base = self.0.try_borrow_mut().ok()?.reserve(layout)?;
+        let size = layout.size();
+        Some(AddrRange { base, size })
     }
 
-    unsafe fn deallocate_pages(&self, _pages: PageRange<UMASpace>) {
+    unsafe fn deallocate(&self, _addr: Addr<UMASpace>, _layout: Layout) {
         unimplemented!("BootMemoryManager cannot deallocate");
     }
 }
+
 unsafe impl Allocator for BootMemoryManager {
     /// # Note
     ///
@@ -249,6 +271,6 @@ unsafe impl Allocator for BootMemoryManager {
     }
 
     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
-        unimplemented!("MemblockAllocator cannot deallocate");
+        unimplemented!("BootMemoryManager cannot deallocate");
     }
 }

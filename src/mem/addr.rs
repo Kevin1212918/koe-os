@@ -3,6 +3,7 @@ use core::marker::PhantomData;
 use core::ops::{Add, Deref, DerefMut, Range, Sub};
 
 use derive_more::derive::Into;
+use strum::VariantArray;
 
 use super::virt::VirtSpace;
 use crate::common::{GiB, KiB, MiB};
@@ -150,7 +151,13 @@ impl<S: AddrSpace> Addr<S> {
 }
 
 impl<S: VirtSpace> Addr<S> {
-    pub fn from_ref<T>(value: &T) -> Self { Addr::new(value as *const T as usize) }
+    pub fn from_ref<T>(value: &T) -> Self { Self::from_ptr(value as *const T) }
+
+    pub fn from_mut<T>(value: &mut T) -> Self { Self::from_mut_ptr(value as *mut T) }
+
+    pub fn from_ptr<T>(value: *const T) -> Self { Addr::new(value as usize) }
+
+    pub fn from_mut_ptr<T>(value: *mut T) -> Self { Addr::new(value as usize) }
 
     pub fn into_ptr<T>(self) -> *mut T { self.usize() as *mut T }
 
@@ -371,40 +378,42 @@ impl<S: AddrSpace> PageRange<S> {
     }
 }
 
-/// An "allocator" for page-sized blocks in an [`AddrSpace`].
+/// An allocator which manages an address space. This trait is based on
+/// [`Allocator`][core::alloc::Allocator].
 ///
-/// This does **not** manage virtual memory mapping, and does not implement
-/// [`alloc::Allocator`][`core::alloc::Allocator`].
-pub trait PageManager<S: AddrSpace> {
-    /// Allocates contiguous `cnt` of `page_size`-sized pages
+/// # Safety
+///
+/// Blocks that are *currently allocated* by an allocator, must not be allocated
+/// by another allocator until either:
+/// - the block is deallocated, or
+/// - the allocator is dropped.
+///
+/// Copying, cloning, or moving the allocator must not invalidate blocks
+/// returned from it. A copied or cloned allocator must behave like the original
+/// allocator.
+pub unsafe trait Allocator<S: AddrSpace> {
+    /// Attempts to allocate a block. On success, returns an address
+    /// range that meet the size and alignment guarentee of layout.
     ///
-    /// It is guarenteed that an allocated page will not be allocated again for
-    /// the duration of the program.
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>>;
+    /// See [allocate][core::alloc::Allocator::allocate] for more details.
+    fn allocate(&self, layout: Layout) -> Option<AddrRange<S>>;
 
-    // /// Allocates contiguous `cnt` of `page_size`-sized pages which starts
-    // /// at `at`. If the `cnt` pages starting at `at` is not available to
-    // /// allocate, this tries to allocate some other contiguous pages.
-    // fn allocate_pages_at(&self, cnt: usize, page_size: PageSize, at:
-    // PageAddr<S>) -> Option<PageRange<S>>;
-
-    /// Deallocate `page`
+    /// Deallocate the block starting at `addr`.
+    ///
+    /// See [allocate][core::alloc::Allocator::deallocate] for more details.
     ///
     /// # Safety
-    /// `page` should be a page allocated by this allocator.
-    unsafe fn deallocate_pages(&self, pages: PageRange<S>);
+    /// - `addr` must denote a block *currently allocated* via this allocator,
+    ///   and
+    /// - `layout` must fit the block of memory.
+    unsafe fn deallocate(&self, addr: Addr<S>, layout: Layout);
 }
-impl<S: AddrSpace, P, T> PageManager<S> for T
-where
-    P: PageManager<S>,
-    T: Deref<Target = P>,
-{
-    fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<S>> {
-        self.deref().allocate_pages(cnt, page_size)
-    }
 
-    unsafe fn deallocate_pages(&self, pages: PageRange<S>) {
-        unsafe { self.deref().deallocate_pages(pages) }
+unsafe impl<S: AddrSpace, A: Allocator<S>> Allocator<S> for &A {
+    fn allocate(&self, layout: Layout) -> Option<AddrRange<S>> { (*self).allocate(layout) }
+
+    unsafe fn deallocate(&self, addr: Addr<S>, layout: Layout) {
+        unsafe { (*self).deallocate(addr, layout) }
     }
 }
 
@@ -415,10 +424,13 @@ where
 /// The kernel assumes certain properties regarding the pages.
 /// - All page sizes are powers of two.
 /// - The alignment equals the size of a page.
+/// - Page variants are listed in order.
+#[repr(u8)]
+#[derive(strum_macros::VariantArray)]
 pub enum PageSize {
-    Small,
-    Large,
-    Huge,
+    Small = 12,
+    Large = 21,
+    Huge = 30,
 }
 impl PageSize {
     /// Largest page size
@@ -438,15 +450,25 @@ impl PageSize {
     pub const fn align(self) -> usize { self.usize() }
 
     /// Returns base-2 log of page size in bytes.
-    pub const fn order(self) -> u8 { self.usize().trailing_zeros() as u8 }
+    pub const fn order(self) -> u8 { self as u8 }
 
     /// Returns page size in bytes.
-    pub const fn usize(self) -> usize {
-        match self {
-            PageSize::Small => 4 * KiB,
-            PageSize::Large => 2 * MiB,
-            PageSize::Huge => 1 * GiB,
+    pub const fn usize(self) -> usize { 1 << self as u8 as usize }
+
+    /// Returns the size of a fitting page for `layout`. `None` if no single
+    /// page can hold the type specified by `layout`.
+    pub const fn fit(layout: Layout) -> Option<Self> {
+        let layout = layout.pad_to_align();
+        let align_order = (usize::BITS - layout.size().leading_zeros()) as u8;
+
+        let mut cur = 0;
+        while cur < Self::VARIANTS.len() {
+            if align_order <= Self::VARIANTS[cur] as u8 {
+                return Some(Self::VARIANTS[cur]);
+            }
+            cur += 1;
         }
+        None
     }
 }
 impl Into<usize> for PageSize {

@@ -1,9 +1,7 @@
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
-use slab::SlabAllocator;
-
-use super::addr::{PageAddr, PageManager, PageSize};
+use super::addr::{PageAddr, PageSize};
 use super::paging::{Flag, MemoryManager};
 use super::phy::PhySpace;
 use super::virt::VirtSpace;
@@ -13,6 +11,7 @@ mod page;
 mod slab;
 
 pub use page::PageAllocator;
+pub use slab::SlabAllocator;
 
 /// The global allocator.
 #[derive(Debug, Clone, Copy)]

@@ -14,7 +14,7 @@ use arraydeque::RangeArgument;
 use entry::{EntryRef, EntryTarget, RawEntry};
 use table::{RawTable, TableRef};
 
-use super::addr::{Addr, PageAddr, PageManager, PageSize};
+use super::addr::{self, Addr, PageAddr, PageSize};
 use super::phy::BootMemoryManager;
 use super::virt::{KernelSpace, PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
 use super::{PageAllocator, UMASpace};
@@ -63,7 +63,7 @@ pub trait MemoryMap {
         vpage: PageAddr<V>,
         ppage: PageAddr<UMASpace>,
         flags: [Flag; N],
-        alloc: &mut impl PageManager<UMASpace>,
+        alloc: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()>;
 
     /// Removes mapping at `vaddr`.
@@ -284,7 +284,7 @@ impl MemoryMap for X86_64MemoryMap {
         vpage: PageAddr<V>,
         ppage: PageAddr<UMASpace>,
         flags: [Flag; N],
-        allocator: &mut impl PageManager<UMASpace>,
+        allocator: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()> {
         debug_assert!(vpage.page_size() == ppage.page_size());
         let mut _kernel_map_guard = None;
@@ -407,7 +407,7 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
     ///
     /// If walker is at the last level, do nothing. If next level of walker is
     /// unmapped, create a new table, and then move down.
-    fn down(&mut self, alloc: &mut impl PageManager<UMASpace>) -> &mut EntryRef<'a> {
+    fn down(&mut self, alloc: &mut impl addr::Allocator<UMASpace>) -> &mut EntryRef<'a> {
         if self.cur_entry.level().next_level().is_none() {
             return self.cur();
         }
@@ -415,7 +415,7 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
         let target = self.cur_entry.target();
         match target {
             EntryTarget::None | EntryTarget::Page(..) => {
-                let table_paddr = alloc.allocate_pages(1, PageSize::Small).unwrap().base;
+                let table_paddr = alloc.allocate(PageSize::Small.layout()).unwrap().base;
                 let table_level = self.cur_entry.level().next_level().unwrap();
                 unsafe {
                     self.cur_entry.reinit(
@@ -423,7 +423,7 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
                         DEFAULT_PAGE_TABLE_FLAGS,
                     );
                 }
-                unsafe { self.down_with_table(table_paddr.addr(), table_level) }
+                unsafe { self.down_with_table(table_paddr, table_level) }
             },
             EntryTarget::Table(level, addr) => unsafe { self.down_with_table(addr, level) },
         }
@@ -552,20 +552,6 @@ impl Level {
             PT => Some(PD),
         }
     }
-}
-
-/// A physical memory allocator to hold page table.
-///
-/// This allocator interfaces with raw address instead of page frame because
-/// this is initialized before the global page frames is initialized.
-///
-/// # Safety
-/// Implementor should ensure [`PageTableAllocator::allocate`] returns memory
-/// which fits the page table, and both functions follow the usual requirements
-/// specified in [`alloc::alloc::Allocator`].
-pub unsafe trait PageTableAllocator {
-    fn allocate(&self) -> Addr<UMASpace>;
-    fn deallocate(&self, addr: Addr<UMASpace>);
 }
 
 // ------------------------- Unused -----------------------------

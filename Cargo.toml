@@ -24,3 +24,6 @@ nonmax = { version = "0.5.5", default-features = false }
 pinned-init = { version = "0.0.9", default-features = false, features = ["alloc"] }
 ringbuf = { version = "0.4.7", default-features = false, features = ["alloc"] }
 spin = "0.9.8"
+strum = { version = "0.27.1", default-features = false, features = ["derive"] }
+strum_macros = "0.27.1"
+
