@@ -16,7 +16,7 @@ use table::{RawTable, TableRef};
 
 use super::addr::{self, Addr, PageAddr, PageSize};
 use super::phy::BootMemoryManager;
-use super::virt::{KernelSpace, PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
+use super::virt::{PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
 use super::{PageAllocator, UMASpace};
 use crate::common::hlt;
 use crate::mem::addr::AddrSpace;
@@ -288,7 +288,7 @@ impl MemoryMap for X86_64MemoryMap {
     ) -> Option<()> {
         debug_assert!(vpage.page_size() == ppage.page_size());
         let mut _kernel_map_guard = None;
-        if V::is_kernel_space() {
+        if V::IS_KERNEL {
             _kernel_map_guard = Some(KERNEL_MAP_LOCK.lock());
         }
 
@@ -311,7 +311,7 @@ impl MemoryMap for X86_64MemoryMap {
 
     fn translate<V: VirtSpace>(&mut self, vaddr: Addr<V>) -> Option<Addr<UMASpace>> {
         let mut _kernel_map_guard = None;
-        if V::is_kernel_space() {
+        if V::IS_KERNEL {
             _kernel_map_guard = Some(KERNEL_MAP_LOCK.lock());
         }
 

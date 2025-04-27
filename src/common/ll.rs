@@ -1,7 +1,7 @@
 use alloc::alloc::Allocator;
 use alloc::boxed::Box;
 use core::marker::PhantomData;
-use core::ptr::{NonNull};
+use core::ptr::NonNull;
 
 use intrusive_collections::{linked_list, Adapter, PointerOps};
 
@@ -9,7 +9,6 @@ use intrusive_collections::{linked_list, Adapter, PointerOps};
 pub unsafe trait Linked<const LINK_OFFSET: usize> {}
 
 pub type Link = linked_list::Link;
-
 
 pub trait LinkPointer<const LINK_OFFSET: usize> {
     type DefaultAdapter: Adapter;
@@ -26,13 +25,13 @@ where
 = linked_list::LinkedList<T::DefaultAdapter>;
 
 pub trait BoxLinkedListExt<A: Allocator + Clone> {
-    fn with_alloc(alloc: A) -> Self;
+    fn new_in(alloc: A) -> Self;
 }
 
 impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> BoxLinkedListExt<A>
     for linked_list::LinkedList<BoxAdapter<LINK_OFFSET, T, A>>
 {
-    fn with_alloc(alloc: A) -> Self {
+    fn new_in(alloc: A) -> Self {
         let adapter = BoxAdapter {
             link_ops: linked_list::LinkOps,
             pointer_ops: BoxPointerOps {

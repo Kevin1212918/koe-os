@@ -16,10 +16,8 @@ use super::UMASpace;
 use crate::mem::phy;
 
 pub trait VirtSpace: AddrSpace {
-    fn is_kernel_space() -> bool { Self::RANGE.start >= 0xFFFF_8000_0000_0000 }
+    const IS_KERNEL: bool;
 }
-pub trait KernelSpace: VirtSpace {}
-impl<S: KernelSpace> VirtSpace for S {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelImageSpace;
@@ -29,7 +27,9 @@ impl KernelImageSpace {
         Addr::new(vaddr.usize() - Self::RANGE.start)
     }
 }
-impl KernelSpace for KernelImageSpace {}
+impl VirtSpace for KernelImageSpace {
+    const IS_KERNEL: bool = true;
+}
 impl AddrSpace for KernelImageSpace {
     const RANGE: Range<usize> = 0xFFFF_FFFF_8000_0000..0xFFFF_FFFF_FF60_0000;
 }
@@ -47,21 +47,27 @@ impl PhysicalRemapSpace {
         Addr::new(vaddr.usize() - Self::OFFSET)
     }
 }
-impl KernelSpace for PhysicalRemapSpace {}
+impl VirtSpace for PhysicalRemapSpace {
+    const IS_KERNEL: bool = true;
+}
 impl AddrSpace for PhysicalRemapSpace {
     const RANGE: Range<usize> = 0xFFFF_8880_0000_0000..0xFFFF_C880_0000_0000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DataStackSpace;
-impl KernelSpace for DataStackSpace {}
+impl VirtSpace for DataStackSpace {
+    const IS_KERNEL: bool = true;
+}
 impl AddrSpace for DataStackSpace {
     const RANGE: Range<usize> = 0xFFFF_C900_0000_0000..0xFFFF_E900_0000_0000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecursivePagingSpace;
-impl KernelSpace for RecursivePagingSpace {}
+impl VirtSpace for RecursivePagingSpace {
+    const IS_KERNEL: bool = true;
+}
 impl AddrSpace for RecursivePagingSpace {
     const RANGE: Range<usize> = 0xFFFF_FE80_0000_0000..0xFFFF_FF00_0000_0000;
 }

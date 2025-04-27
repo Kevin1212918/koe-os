@@ -1,3 +1,6 @@
+use core::mem::offset_of;
+
+use crate::common::ll::{Link, Linked};
 use crate::mem::X86_64MemoryMap;
 
 pub type Pid = u32;
@@ -28,7 +31,11 @@ struct X86_64ExecCxt {
     fs: u64,
     gs: u64,
 }
+
+const TCB_LINK_OFFSET: usize = offset_of!(Tcb, link);
+unsafe impl Linked<TCB_LINK_OFFSET> for Tcb {}
 struct Tcb {
+    link: Link,
     id: Tid,
     exec_cxt: X86_64ExecCxt,
 }

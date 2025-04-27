@@ -134,9 +134,9 @@ impl UntypedCache {
     /// typed interface.
     fn new() -> Self {
         Self {
-            empty_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::with_alloc(PageAllocator),
-            partial_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::with_alloc(PageAllocator),
-            full_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::with_alloc(PageAllocator),
+            empty_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::new_in(PageAllocator),
+            partial_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::new_in(PageAllocator),
+            full_slabs: LinkedList::<SLAB_LINK_OFFSET, BoxSlab>::new_in(PageAllocator),
         }
     }
 
