@@ -24,6 +24,7 @@ use multiboot2::{BootInformation, BootInformationHeader};
 mod boot;
 mod common;
 mod drivers;
+mod fs;
 mod interrupt;
 mod io;
 mod mem;
