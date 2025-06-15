@@ -17,6 +17,7 @@ bitvec = { version = "1.0.1", default-features = false }
 derive_more = { version = "1.0.0", default-features = false, features = [
     "full",
 ] }
+goblin = { version = "0.9.3", default-features = false, features = ["elf64"] }
 intrusive-collections = "0.9.7"
 multiboot2 = { version = "0.23.0", default-features = false }
 no_std_io = { version = "0.6.0", features = ["alloc"] }
