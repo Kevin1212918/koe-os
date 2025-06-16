@@ -10,9 +10,7 @@ use core::{array, slice};
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::view::BitView;
-use pinned_init::{
-    init, init_from_closure, pin_data, Init,
-};
+use pinned_init::{init, init_from_closure, pin_data, Init};
 
 use super::page::PageAllocator;
 use super::{allocate_if_zst, deallocate_if_zst};

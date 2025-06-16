@@ -8,24 +8,13 @@ use core::str;
 use super::*;
 use crate::fs::vfs::File;
 
-pub static FS: spin::Mutex<Option<InitRamFs>> = spin::Mutex::new(None);
-
 pub struct InitRamFs {
-    pub tape: &'static [u8],
+    tape: Box<[u8]>,
 }
 impl InitRamFs {
     /// Mount the buffer at `tape` as the init ramdisk. [`FS`] will be populated
     /// on a successful call.
-    ///
-    /// # Safety
-    /// - `tape` is allocated on the global allocator.
-    pub unsafe fn mount(tape: NonNull<[u8]>) {
-        // TODO: validate tape format
-
-        *FS.lock() = Some(Self {
-            tape: unsafe { tape.as_ref() },
-        });
-    }
+    pub fn mount(tape: Box<[u8]>) -> Self { todo!() }
 }
 
 impl Drop for InitRamFs {
@@ -34,9 +23,7 @@ impl Drop for InitRamFs {
 
         // SAFETY: Guarenteed by `Self::mount` that the backing storage is allocated on
         // the global allocator.
-
-        // FIXME: not safe when dropped while referencing file still lives.
-        unsafe { dealloc(tape, Layout::for_value(self.tape)) };
+        todo!()
     }
 }
 

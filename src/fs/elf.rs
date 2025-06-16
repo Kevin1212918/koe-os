@@ -1,4 +1,4 @@
-use super::vfs::File;
+use super::File;
 
 /// Load elf
 ///

@@ -1,10 +1,87 @@
+use alloc::boxed::Box;
+use alloc::rc::Rc;
 use alloc::string::String;
 use core::ffi::CStr;
-use core::str;
+use core::{ptr, slice, str};
 
 use bitflags::bitflags;
 
+use super::{Error, FileSystem, INode, Result};
+
 pub const BLOCK_SIZE: usize = 512;
+
+#[derive(Clone)]
+pub struct UStarFs(Rc<spin::Mutex<Box<[u8]>>>);
+pub struct UStarNode {
+    fs: UStarFs,
+    header_off: usize,
+}
+
+impl UStarFs {
+    fn find_header_off<'a, 'z>(tape: &'a [u8], path: &'z str) -> Option<usize> {
+        let mut header_off = 0;
+        while header_off < tape.len() {
+            let header = unsafe {
+                tape.as_ptr()
+                    .byte_add(header_off)
+                    .cast::<Header>()
+                    .as_ref()
+                    .unwrap()
+            };
+            if &header.name() == path {
+                return Some(header_off);
+            }
+            header_off += BLOCK_SIZE + header.size().next_multiple_of(BLOCK_SIZE);
+        }
+        None
+    }
+}
+impl UStarNode {
+    fn header(tape: &[u8], header_off: usize) -> &Header {
+        unsafe {
+            tape.as_ptr()
+                .byte_add(header_off)
+                .cast::<Header>()
+                .as_ref_unchecked()
+        }
+    }
+
+    fn file(tape: &[u8], header_off: usize) -> &[u8] {
+        let header = Self::header(tape, header_off);
+        let start = unsafe { (header as *const Header).byte_add(BLOCK_SIZE).cast() };
+        let size = header.size();
+        unsafe { slice::from_raw_parts(start, size) }
+    }
+}
+
+impl FileSystem for UStarFs {
+    fn root(&self) -> Rc<dyn INode> {
+        Rc::new(UStarNode {
+            fs: self.clone(),
+            header_off: 0,
+        })
+    }
+
+    fn resolve(&self, path: &str) -> Option<Rc<dyn INode>> {
+        let tape = self.0.lock();
+        let header_off = Self::find_header_off(&tape, path)?;
+        Some(Rc::new(UStarNode {
+            fs: self.clone(),
+            header_off,
+        }))
+    }
+}
+impl INode for UStarNode {
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+        let tape = self.fs.0.lock();
+        let file = Self::file(&tape, self.header_off);
+        let available_cnt = file.len().checked_sub(offset).ok_or(Error::Unknown)?;
+        let byte_cnt = usize::min(buf.len(), available_cnt);
+        buf[0..byte_cnt].copy_from_slice(&file[offset..offset + byte_cnt]);
+        Ok(byte_cnt)
+    }
+}
+
 #[repr(C, packed)]
 pub struct Header {
     pub name: [u8; 100],
