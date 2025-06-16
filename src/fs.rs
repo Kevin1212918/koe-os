@@ -3,7 +3,6 @@ use alloc::rc::Rc;
 use crate::fs::vfs::Vfs;
 
 mod elf;
-mod initramfs;
 mod ustar;
 mod vfs;
 
