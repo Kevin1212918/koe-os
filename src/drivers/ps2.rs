@@ -11,7 +11,6 @@ use crate::drivers::vga::VGA_BUFFER;
 use crate::interrupt::InterruptGuard;
 use crate::io::keyboard::keycode::*;
 use crate::io::keyboard::{KeyEvent, Keyboard, VirtKeyboard};
-use crate::log;
 
 const DATA_PORT: Port = Port(0x60);
 const STATUS_PORT: RPort = RPort(0x64);

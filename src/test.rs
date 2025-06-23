@@ -21,8 +21,10 @@ pub fn test_mem() {
         assert!(i.0 == *i.1 as usize);
     }
     let mut test3 = Vec::new();
+    test3.reserve_exact(43);
     for j in 0..1200 {
         let mut inner = Vec::new();
+        inner.reserve_exact(15);
         for i in 0..10 {
             inner.push(i * j);
         }

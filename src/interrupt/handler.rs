@@ -6,10 +6,10 @@ use core::ptr;
 
 use super::pic::ack;
 use super::{InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF, VECTOR_PIC};
-use crate::common::hlt;
+use crate::common::log::error;
+use crate::common::{hlt, log};
 use crate::drivers::ps2;
 use crate::drivers::vga::VGA_BUFFER;
-use crate::log;
 
 
 #[repr(transparent)]
@@ -17,12 +17,12 @@ use crate::log;
 struct Isr(pub extern "C" fn());
 
 fn page_fault_handler(stack: &InterruptStack) {
-    log!("Page Fault!");
+    error!("Page Fault!");
     hlt();
 }
 
 fn double_fault_handler(stack: &InterruptStack) {
-    log!("Double Fault!");
+    error!("Double Fault!");
     hlt();
 }
 

@@ -18,17 +18,11 @@ pub fn hlt() -> ! {
 
 pub mod array_forest;
 pub mod ll;
+pub mod log;
 pub mod panic;
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 pub mod pmio;
-
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {
-        write!(VGA_BUFFER.lock(), $($arg)*).ok()
-    };
-}
 
 #[repr(u8)]
 pub enum Privilege {
