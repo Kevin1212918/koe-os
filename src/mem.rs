@@ -33,12 +33,9 @@ extern "C" {
 }
 
 /// Initialize paging and global/page allocators.
-pub fn init(boot_info: BootInformation) {
-    let memory_info = boot_info
-        .memory_map_tag()
-        .expect("Currently does not support uefi memory map");
+pub fn init(boot_info: &BootInformation) {
     init_gdtr();
-    let bmm = phy::init_boot_mem(memory_info.memory_areas());
+    let bmm = phy::init_boot_mem(boot_info);
     MMU.call_once(|| X86_64MemoryManager::init(&bmm));
     phy::init(bmm);
 }

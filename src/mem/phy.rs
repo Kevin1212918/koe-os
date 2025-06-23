@@ -22,16 +22,14 @@ use crate::mem::{kernel_end_lma, paging};
 mod buddy;
 mod memblock;
 
-pub fn init_boot_mem(memory_areas: &[MemoryArea]) -> BootMemoryManager {
-    BootMemoryManager(RefCell::new(memblock::init(
-        memory_areas,
-    )))
+pub fn init_boot_mem(boot_info: &BootInformation) -> BootMemoryManager {
+    BootMemoryManager(RefCell::new(memblock::init(boot_info)))
 }
 pub fn init(mut bmm: BootMemoryManager) {
     // init PMM
     PMM.call_once(|| {
         // SAFETY: PhysicalRemap was mapped.
-        let pmm = unsafe { PhysicalMemoryRecord::new(&bmm) };
+        let pmm = unsafe { PhysicalMemoryRecord::new(bmm) };
         spin::Mutex::new(pmm)
     });
 }
@@ -83,14 +81,13 @@ impl PhysicalMemoryRecord {
     /// Create a [`PhysicalMemoryRecord`] for [`UMASpace`].
     ///
     /// `PhysicalMemoryRecord` inherits all the records from `bmm`.
-    /// Consequently, this function freezes `bmm`.
     ///
     /// Since `PhysicalMemoryRecord` does not track its own memory,
     /// its backing memory is leaked.
     ///
     /// # Safety
     /// PhysicalRemapSpace should be mapped.
-    unsafe fn new(bmm: &BootMemoryManager) -> Self {
+    unsafe fn new(bmm: BootMemoryManager) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
         let managed_range = bmm.0.borrow().managed_range();
         let managed_pages = managed_range.overlapped_pages(PageSize::Small);
@@ -105,13 +102,12 @@ impl PhysicalMemoryRecord {
         let frames = unsafe { frames_ptr.as_mut() };
         let base = managed_pages.base;
         let mut buddy =
-            BuddySystem::new(frames.len(), bmm).expect("Boot Allocator should not fail.");
+            BuddySystem::new(frames.len(), &bmm).expect("Boot Allocator should not fail.");
 
-        bmm.0.borrow_mut().freeze();
-        let memblock_system = bmm.0.borrow();
-        let free_blocks = memblock_system.free_blocks();
-        for free_block in free_blocks {
-            for aligned in free_block.aligned_split(
+        let mb = bmm.0.borrow();
+        let available_blocks = mb.available_regions();
+        for available_block in available_blocks {
+            for aligned in available_block.split_aligned(
                 FRAME_ORDER,
                 BUDDY_MAX_ORDER + FRAME_ORDER,
             ) {
@@ -126,6 +122,7 @@ impl PhysicalMemoryRecord {
                 }
             }
         }
+
         Self {
             frames,
             base,
@@ -234,15 +231,38 @@ unsafe impl addr::Allocator<UMASpace> for PhysicalMemoryManager {
     }
 }
 
+/// Statically initialized memory manager.
+///
+/// This only supports a limited number of reservations, so it is replaced by
+/// the [`PhysicalMemoryManager`]. When it is retired, its reserved memory
+/// blocks are leaked.
 pub struct BootMemoryManager(RefCell<&'static mut MemblockSystem>);
 impl BootMemoryManager {
     pub fn managed_range(&self) -> AddrRange<UMASpace> { self.0.borrow().managed_range() }
 }
 unsafe impl addr::Allocator<UMASpace> for BootMemoryManager {
+    /// Allocates by rounding layout up to page boundary.
     fn allocate(&self, layout: Layout) -> Option<AddrRange<UMASpace>> {
-        let base = self.0.try_borrow_mut().ok()?.reserve(layout)?;
+        let mut mb = self.0.borrow_mut();
+        let mut target = None;
+        let align = layout.align();
         let size = layout.size();
-        Some(AddrRange { base, size })
+
+        for region in mb.available_regions() {
+            let Some(base) = region.start().align_ceil(align) else {
+                continue;
+            };
+            let candidate = AddrRange::new(base, size);
+            if region.contains(&candidate) {
+                target = Some(candidate);
+                break;
+            }
+        }
+
+        if let Some(target) = target {
+            mb.reserve(target);
+        }
+        target
     }
 
     unsafe fn deallocate(&self, _addr: Addr<UMASpace>, _layout: Layout) {
@@ -252,15 +272,11 @@ unsafe impl addr::Allocator<UMASpace> for BootMemoryManager {
 
 unsafe impl Allocator for BootMemoryManager {
     /// # Note
-    ///
     /// This should not be used before `PhysicalRemapSpace` is initialized.
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let paddr = self
-            .0
-            .try_borrow_mut()
-            .map_err(|_| AllocError)?
-            .reserve(layout)
-            .ok_or(AllocError)?;
+        let paddr = <BootMemoryManager as addr::Allocator<UMASpace>>::allocate(self, layout)
+            .ok_or(AllocError)?
+            .base;
         let vaddr = PhysicalRemapSpace::p2v(paddr);
 
         let ptr = NonNull::new(vaddr.into_ptr::<u8>().cast()).ok_or(AllocError)?;

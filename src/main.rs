@@ -46,7 +46,7 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
 
     log!("boot info found\n");
 
-    mem::init(boot_info);
+    mem::init(&boot_info);
     test::test_mem();
     log!("mem initalized\n");
 

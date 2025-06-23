@@ -18,6 +18,9 @@ pub trait AddrSpace: Clone + Copy + PartialEq + Eq + PartialOrd + Ord {
     const RANGE: Range<usize>;
     /// Unit const for assertion.
     const _ASSERT_RANGE_IS_PAGE_ALIGNED: () = assert_range_is_page_aligned::<Self>();
+
+    const MIN_ADDR: Addr<Self> = { Addr::new(Self::RANGE.start) };
+    const MAX_ADDR: Addr<Self> = { Addr::new(Self::RANGE.end - 1) };
 }
 const fn assert_range_is_page_aligned<S: AddrSpace>() {
     assert!(S::RANGE.start % PageSize::MAX.align() == 0);
@@ -210,10 +213,55 @@ impl<S: AddrSpace> AddrRange<S> {
         }
     }
 
+    /// Check if ranges overlaps.
+    pub const fn overlaps(&self, other: &Self) -> bool {
+        // NOTE: Accessing value directly due to const restraint
+        self.start().value < other.end().value && other.start().value < self.end().value
+    }
+
+    /// Check if this range contains the other range.
+    pub const fn contains(&self, other: &Self) -> bool {
+        // NOTE: Accessing value directly due to const restraint
+        self.start().value <= other.start().value && other.end().value <= self.end().value
+    }
+
+    /// Returns the set intersect of 'self' and 'rhs'. If the result is empty,
+    /// base of the range is unspecified.
+    pub fn range_intersect(&self, rhs: &Self) -> Self {
+        let start = self.start().max(rhs.start());
+        let end = self.end().min(rhs.end());
+        AddrRange::from(start..end)
+    }
+
+    /// Returns the set union of 'self' and 'rhs'.
+    ///
+    /// In order to handle the resulting disjoint ranges, two address ranges
+    /// are returned. The returned ranges may be empty with an unspecified base.
+    pub fn range_sum(&self, rhs: &Self) -> [Self; 2] {
+        if !self.overlaps(rhs) {
+            return [self.clone(), rhs.clone()];
+        }
+        let start = self.start().min(rhs.start());
+        let end = self.end().max(rhs.end());
+        [AddrRange::from(start..end), AddrRange::empty()]
+    }
+
+    /// Returns the set union of 'self' and 'rhs'. None if 'self' and 'rhs' do
+    /// not overlap.
+    pub fn range_sum_strict(&self, rhs: &Self) -> Option<Self> {
+        if !self.overlaps(rhs) {
+            return None;
+        }
+        let start = self.start().min(rhs.start());
+        let end = self.end().max(rhs.end());
+        Some(AddrRange::from(start..end))
+    }
+
+
     /// Returns the set subtraction of `rhs` from `self`.
     ///
     /// In order to handle the resulting disjoint ranges, two address ranges
-    /// are returned. The returned ranges may be empty.
+    /// are returned. The returned ranges may be empty with an unspecified base.
     pub fn range_sub(&self, rhs: Self) -> [Self; 2] {
         if self.is_empty() {
             return [Self::empty(), rhs];
@@ -269,7 +317,69 @@ impl<S: AddrSpace> AddrRange<S> {
             len: residual.div_ceil(page_size.usize()),
         }
     }
+
+    pub fn split_aligned(mut self, min_order: u8, max_order: u8) -> SplitAligned<S> {
+        let empty = SplitAligned {
+            range: self,
+            offset: self.size,
+            max_order: max_order as u32,
+        };
+
+        let min_align = 1 << min_order;
+
+        let Some(base) = self.start().align_ceil(min_align) else {
+            return empty;
+        };
+
+        self.base = base;
+
+        let Some(end) = self.end().align_floor(min_align) else {
+            return empty;
+        };
+
+        self.size = match (end - base).try_into() {
+            Ok(x) => x,
+            Err(_) => return empty,
+        };
+
+        return SplitAligned {
+            range: self,
+            offset: 0,
+            max_order: max_order as u32,
+        };
+    }
 }
+
+/// An iterator of power-of-2 aligned ranges splitted from a single
+/// range.
+pub struct SplitAligned<S: AddrSpace> {
+    range: AddrRange<S>,
+    offset: usize,
+    max_order: u32,
+}
+impl<S: AddrSpace> Iterator for SplitAligned<S> {
+    type Item = AddrRange<S>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.range.size {
+            return None;
+        }
+        let offset_order = self.offset.trailing_zeros();
+        let diff = self.range.size - self.offset;
+        let diff_order = usize::BITS - diff.leading_zeros() - 1;
+
+        let next_order = offset_order.min(diff_order).min(self.max_order);
+
+        let next_size = 1 << next_order;
+        let next = AddrRange {
+            base: self.range.base + self.offset,
+            size: next_size,
+        };
+        self.offset += next_size;
+        Some(next)
+    }
+}
+
 /// A page aligned address.
 #[derive(Debug, Clone, Copy, Into)]
 pub struct PageAddr<S: AddrSpace> {

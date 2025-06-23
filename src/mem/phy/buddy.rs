@@ -19,9 +19,6 @@ pub struct BuddySystem {
 }
 impl BuddySystem {
     /// Create a buddy system that manages `page_cnt` pages.
-    ///
-    /// # Panic
-    /// See [`BitForest::new`] for `buf` requirements.
     pub fn new(page_cnt: usize, boot_alloc: impl Allocator) -> Result<Self, AllocError> {
         let dummy_page_cnt = page_cnt.next_power_of_two();
 
@@ -66,13 +63,12 @@ impl BuddySystem {
     /// [`MemblockSystem`]
     ///
     /// # Safety
-    /// Should not be called outside of initialization.
+    /// Should not overwrite existing allocations.
     pub unsafe fn free_forced(&mut self, idx: usize, order: u8) {
         assert!(order <= self.max_order);
 
         let max_depth = self.map.max_depth();
         let target_depth = max_depth - order as usize;
-        // let idx = idx >> order;
 
         for depth in target_depth..=max_depth {
             let order = max_depth - depth;
@@ -159,6 +155,7 @@ impl BuddySystem {
 
     pub const fn max_order(&self) -> u8 { self.max_order }
 
+    /// Update forest metadata from cursor up.
     fn fixup_map(cursor: &mut Cursor<&mut ArrayForest<Buddy>, Buddy>) {
         while cursor.depth() != 0 {
             let me = *cursor.get();
