@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use super::{FileSystem, INode, Result};
 
 // TODO: Support multiple mounts
-
 pub struct Vfs {
     mounts: Vec<Box<dyn FileSystem>>,
 }

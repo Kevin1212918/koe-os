@@ -18,6 +18,7 @@ pub struct UStarNode {
 }
 
 impl UStarFs {
+    pub fn new(buf: Box<[u8]>) -> Self { Self(Rc::new(spin::Mutex::new(buf))) }
     fn find_header_off<'a, 'z>(tape: &'a [u8], path: &'z str) -> Option<usize> {
         let mut header_off = 0;
         while header_off < tape.len() {

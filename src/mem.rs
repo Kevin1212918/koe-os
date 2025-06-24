@@ -7,7 +7,7 @@ use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
 use paging::{Flag, MemoryManager, MMU};
-use virt::{KernelImageSpace, PhysicalRemapSpace};
+use virt::KernelImageSpace;
 
 
 pub mod addr;
@@ -20,6 +20,7 @@ pub use alloc::{GlobalAllocator, PageAllocator};
 
 pub use paging::{X86_64MemoryManager, X86_64MemoryMap};
 pub use phy::UMASpace;
+pub use virt::PhysicalRemapSpace;
 
 use crate::common::{hlt, Privilege};
 
