@@ -1,3 +1,4 @@
 /target
 *.iso
 iso/boot/koe-os
+out.txt

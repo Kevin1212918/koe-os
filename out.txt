@@ -1,7 +1,0 @@
-[  OK  ] serial ports initialzed
-[  OK  ] boot info found
-[  OK  ] mem initalized
-[  OK  ] interrupt initialized
-[  OK  ] drivers initialized
-[PANIC!] assertion failed: false at 
-Some(Location { file: "src/main.rs", line: 51, col: 5 })

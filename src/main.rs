@@ -39,8 +39,16 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
 
     let boot_info = unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) };
     let boot_info = boot_info.expect("boot info not found");
-
     ok!("boot info found");
+
+    for m in boot_info.module_tags() {
+        ok!(
+            "found module: at {:#x} -- {:#x}",
+            m.start_address(),
+            m.end_address()
+        )
+    }
+
     mem::init(&boot_info);
     test::test_mem();
     ok!("mem initalized");
