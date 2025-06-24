@@ -48,7 +48,6 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     ok!("interrupt initialized");
     drivers::init();
     ok!("drivers initialized");
-    assert!(false);
     ok!("kernel initialized");
     hlt()
 }
