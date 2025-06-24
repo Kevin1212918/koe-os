@@ -20,6 +20,7 @@ use io::monitor::Monitor;
 use multiboot2::{BootInformation, BootInformationHeader};
 
 use crate::common::log::ok;
+use crate::drivers::serial;
 
 mod boot;
 mod common;
@@ -33,7 +34,8 @@ mod usr;
 
 #[no_mangle]
 pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
-    use drivers::vga::*;
+    serial::init();
+    ok!("serial ports initialzed");
 
     let boot_info = unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) };
     let boot_info = boot_info.expect("boot info not found");
