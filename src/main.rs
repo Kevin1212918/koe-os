@@ -49,14 +49,24 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     let boot_info = boot_info.expect("boot info not found");
     ok!("boot info found");
 
-    for m in boot_info.module_tags() {
-        ok!(
-            "found module: at {:#x} -- {:#x}",
-            m.start_address(),
-            m.end_address()
-        )
-    }
 
+
+    mem::init(boot_info);
+    test::test_mem();
+    ok!("mem initalized");
+
+    // Reload BootInformation using virtual address.
+    let mbi_addr = Addr::<UMASpace>::new(mbi_ptr as usize);
+    let mbi_addr = PhysicalRemapSpace::p2v(mbi_addr);
+    let mbi_ptr: *const BootInformationHeader = mbi_addr.into_ptr();
+    let boot_info =
+        unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) }.unwrap();
+
+    interrupt::init();
+    ok!("interrupt initialized");
+    drivers::init();
+    ok!("drivers initialized");
+    ok!("kernel initialized");
 
     let boot_mod = boot_info.module_tags().next().unwrap();
     ok!("initrd located");
@@ -66,16 +76,6 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
         initrd_addr.into_ptr(),
         boot_mod.module_size() as usize,
     );
-
-    mem::init(&boot_info);
-    test::test_mem();
-    ok!("mem initalized");
-    interrupt::init();
-    ok!("interrupt initialized");
-    drivers::init();
-    ok!("drivers initialized");
-    ok!("kernel initialized");
-
     // FIXME: unsafe!
     let initrd = unsafe { Box::from_raw(initrd_ptr) };
     let initrd = fs::ustar::UStarFs::new(initrd);
@@ -84,7 +84,7 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     let node = initrd.resolve("initrd/test.txt").expect("should find file");
     let mut file = File::open_with_node(node);
 
-    let mut buf = vec![0; 100];
+    let mut buf = vec![0; 4096];
     let size = file.read(&mut buf).expect("read should succeed");
 
     let mut com1 = serial::COM1.lock();

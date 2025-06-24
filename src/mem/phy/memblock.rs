@@ -43,9 +43,9 @@ pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {
     mb.reserve(AddrRange::from(start..end));
 
     // Mark boot info as reserved.
-    let start = Addr::new(boot_info.start_address() as usize);
-    let end = Addr::new(boot_info.end_address() as usize);
-    mb.reserve(AddrRange::from(start..end));
+    let base = Addr::new(boot_info.start_address() as usize);
+    let size = boot_info.total_size();
+    mb.reserve(AddrRange::new(base, size));
 
     // Mark all boot modules as reserved.
     for module in boot_info.module_tags() {

@@ -25,7 +25,7 @@ mod memblock;
 pub fn init_boot_mem(boot_info: &BootInformation) -> BootMemoryManager {
     BootMemoryManager(RefCell::new(memblock::init(boot_info)))
 }
-pub fn init(mut bmm: BootMemoryManager) {
+pub fn init(bmm: BootMemoryManager) {
     // init PMM
     PMM.call_once(|| {
         // SAFETY: PhysicalRemap was mapped.
