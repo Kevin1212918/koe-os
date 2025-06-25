@@ -1,14 +1,20 @@
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 
 use crate::fs::vfs::Vfs;
 
 mod elf;
-pub mod ustar;
+mod ustar;
 mod vfs;
 
+pub static FS: spin::Mutex<Vfs> = spin::Mutex::new(Vfs::new());
 
+pub fn init_initrd(rd: Box<[u8]>) {
+    let fs = ustar::UStarFs::new(rd);
+    FS.lock().mount(Box::new(fs), "/");
+}
 
-pub trait FileSystem {
+pub trait FileSystem: Send + Sync {
     fn root(&self) -> Rc<dyn INode>;
     fn resolve(&self, path: &str) -> Option<Rc<dyn INode>>;
 }
@@ -33,9 +39,8 @@ pub struct File {
     inode: Rc<dyn INode>,
 }
 impl File {
-    pub fn open_with_node(inode: Rc<dyn INode>) -> Self { Self { pos: 0, inode } }
-    pub fn open(vfs: &Vfs, path: &str) -> Option<Self> {
-        let inode = vfs.resolve(path)?;
+    pub fn open(path: &str) -> Option<Self> {
+        let inode = FS.lock().resolve(path)?;
         Some(Self { pos: 0, inode })
     }
     pub fn read(&mut self, buf: &mut [u8]) -> Option<usize> { self.inode.read(self.pos, buf).ok() }

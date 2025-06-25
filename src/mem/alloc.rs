@@ -13,6 +13,20 @@ mod slab;
 pub use page::PageAllocator;
 pub use slab::SlabAllocator;
 
+/// An allocator which fails all allocations and no-op on deallocation.
+///
+/// This is useful for constructing a `Box` over static memory.
+pub struct StaticAllocator;
+unsafe impl Allocator for StaticAllocator {
+    fn allocate(&self, _: Layout) -> Result<NonNull<[u8]>, AllocError> { Err(AllocError) }
+
+    /// Performs a no-op.
+    ///
+    /// # Safety
+    /// This function is always _safe_.
+    unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {}
+}
+
 /// The global allocator.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalAllocator;

@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use core::ffi::CStr;
 use core::{ptr, slice, str};
 
@@ -11,14 +12,14 @@ use super::{Error, FileSystem, INode, Result};
 pub const BLOCK_SIZE: usize = 512;
 
 #[derive(Clone)]
-pub struct UStarFs(Rc<spin::Mutex<Box<[u8]>>>);
+pub struct UStarFs(Arc<spin::Mutex<Box<[u8]>>>);
 pub struct UStarNode {
     fs: UStarFs,
     header_off: usize,
 }
 
 impl UStarFs {
-    pub fn new(buf: Box<[u8]>) -> Self { Self(Rc::new(spin::Mutex::new(buf))) }
+    pub fn new(buf: Box<[u8]>) -> Self { Self(Arc::new(spin::Mutex::new(buf))) }
     fn find_header_off<'a, 'z>(tape: &'a [u8], path: &'z str) -> Option<usize> {
         let mut header_off = 0;
         while header_off < tape.len() {

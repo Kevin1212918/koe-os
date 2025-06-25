@@ -16,6 +16,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec;
+use core::ffi::CStr;
 use core::fmt::Write;
 use core::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 
@@ -24,7 +25,7 @@ use drivers::ps2;
 use io::monitor::Monitor;
 use multiboot2::{BootInformation, BootInformationHeader};
 
-use crate::common::log::ok;
+use crate::common::log::{error, ok};
 use crate::drivers::serial;
 use crate::fs::{File, FileSystem};
 use crate::mem::addr::Addr;
@@ -49,18 +50,21 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     let boot_info = boot_info.expect("boot info not found");
     ok!("boot info found");
 
-
-
     mem::init(boot_info);
     test::test_mem();
     ok!("mem initalized");
 
     // Reload BootInformation using virtual address.
-    let mbi_addr = Addr::<UMASpace>::new(mbi_ptr as usize);
-    let mbi_addr = PhysicalRemapSpace::p2v(mbi_addr);
-    let mbi_ptr: *const BootInformationHeader = mbi_addr.into_ptr();
-    let boot_info =
-        unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) }.unwrap();
+    let mbi_ptr = mbi_ptr as usize + PhysicalRemapSpace::OFFSET;
+    let boot_info = unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) };
+    let boot_info = boot_info.expect("boot info not found");
+
+    if let Some(rd) = find_initrd(&boot_info) {
+        fs::init_initrd(rd);
+        ok!("initrd mounted");
+    } else {
+        error!("initrd not found");
+    }
 
     interrupt::init();
     ok!("interrupt initialized");
@@ -68,32 +72,17 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     ok!("drivers initialized");
     ok!("kernel initialized");
 
-    let boot_mod = boot_info.module_tags().next().unwrap();
-    ok!("initrd located");
-    let initrd_addr = Addr::<UMASpace>::new(boot_mod.start_address() as usize);
-    let initrd_addr = PhysicalRemapSpace::p2v(initrd_addr);
-    let initrd_ptr = slice_from_raw_parts_mut(
-        initrd_addr.into_ptr(),
-        boot_mod.module_size() as usize,
-    );
-    // FIXME: unsafe!
-    let initrd = unsafe { Box::from_raw(initrd_ptr) };
-    let initrd = fs::ustar::UStarFs::new(initrd);
-    ok!("initrd loaded");
-
-    let node = initrd.resolve("initrd/test.txt").expect("should find file");
-    let mut file = File::open_with_node(node);
-
-    let mut buf = vec![0; 4096];
-    let size = file.read(&mut buf).expect("read should succeed");
-
-    let mut com1 = serial::COM1.lock();
-    for b in buf {
-        if b == 0 {
-            break;
-        }
-        com1.write(b);
-    }
-
     hlt()
+}
+
+// FIXME: Initrd memory is not handled by global allocator. This is unsafe.
+fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
+    let boot_mod = boot_info.module_tags().next()?;
+    let data = boot_mod.start_address() as usize + PhysicalRemapSpace::OFFSET;
+    let data = data as *mut u8;
+    let len = boot_mod.module_size() as usize;
+    let slice = slice_from_raw_parts_mut(data, len);
+
+    // Not safe!
+    Some(unsafe { Box::from_raw(slice) })
 }

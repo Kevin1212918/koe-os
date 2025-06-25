@@ -33,7 +33,8 @@ extern "C" {
     static _KERNEL_START_LMA: u8;
 }
 
-/// Initialize paging and global/page allocators.
+/// Initialize paging and global/page allocators. Several memory regions are
+/// leaked here.
 pub fn init(boot_info: BootInformation) {
     init_gdtr();
     let bmm = phy::init_boot_mem(&boot_info);

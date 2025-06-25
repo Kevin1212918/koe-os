@@ -9,6 +9,7 @@ pub struct Vfs {
     mounts: Vec<Box<dyn FileSystem>>,
 }
 impl Vfs {
+    pub const fn new() -> Self { Self { mounts: Vec::new() } }
     pub fn mount(&mut self, fs: Box<dyn FileSystem>, path: &str) {
         assert!(path == "/");
         self.mounts.insert(0, fs);
