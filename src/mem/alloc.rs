@@ -2,7 +2,7 @@ use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
 use super::addr::{PageAddr, PageSize};
-use super::paging::{Flag, MemoryManager};
+use super::paging::MemoryManager;
 use super::phy::PhySpace;
 use super::virt::VirtSpace;
 use super::UMASpace;

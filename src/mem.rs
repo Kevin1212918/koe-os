@@ -6,7 +6,7 @@ use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use paging::{Flag, MemoryManager, MMU};
+use paging::{Flags, MemoryManager, MMU};
 use virt::KernelImageSpace;
 
 

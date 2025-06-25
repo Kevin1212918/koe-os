@@ -26,7 +26,7 @@ use crate::mem::{kernel_end_vma, kernel_size};
 mod entry;
 mod table;
 
-pub use entry::Flag;
+pub use entry::Flags;
 
 pub trait MemoryManager {
     type Map: MemoryMap;
@@ -62,7 +62,7 @@ pub trait MemoryMap {
         &mut self,
         vpage: PageAddr<V>,
         ppage: PageAddr<UMASpace>,
-        flags: [Flag; N],
+        flags: Flags,
         alloc: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()>;
 
@@ -88,7 +88,7 @@ pub static MMU: spin::Once<X86_64MemoryManager> = spin::Once::new();
 // TODO: Use RAII to guard kernel mappings.
 pub static KERNEL_MAP_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
-const DEFAULT_PAGE_TABLE_FLAGS: [Flag; 2] = [Flag::Present, Flag::ReadWrite];
+const DEFAULT_PAGE_TABLE_FLAGS: Flags = Flags::PRESENT.union(Flags::WRITEABLE);
 
 pub struct X86_64MemoryManager(spin::Mutex<X86_64MemoryMap>);
 
@@ -106,18 +106,16 @@ impl MemoryManager for X86_64MemoryManager {
 
             let kernel_space_start = Addr::new(KernelImageSpace::RANGE.start);
             let mut pdpt_ent_ref = pdpt_ref.index_with_vaddr(kernel_space_start);
-            unsafe {
-                pdpt_ent_ref
-                    .reinit(
-                        KernelImageSpace::v2p(Addr::new(KERNEL_PD_TABLE.get() as usize)),
-                        DEFAULT_PAGE_TABLE_FLAGS,
-                    )
-                    .expect("init kernel pd should succeed")
-            };
+            pdpt_ent_ref.reinit(
+                KernelImageSpace::v2p(Addr::new(KERNEL_PD_TABLE.get() as usize)),
+                DEFAULT_PAGE_TABLE_FLAGS,
+            );
 
             const KERNEL_PAGE_SIZE: PageSize = Level::PD.page_size();
-            const KERNEL_PAGE_FLAGS: [Flag; 4] =
-                [Flag::Present, Flag::PageSize, Flag::Global, Flag::ReadWrite];
+            const KERNEL_PAGE_FLAGS: Flags = Flags::PRESENT
+                .union(Flags::BIG_PAGE)
+                .union(Flags::GLOBAL)
+                .union(Flags::WRITEABLE);
 
             let mut pd_ref = unsafe {
                 TableRef::from_raw(
@@ -136,14 +134,16 @@ impl MemoryManager for X86_64MemoryManager {
         }
 
         fn init_physical_remap_pdpt(pdpt_ref: TableRef<'_>, remap_idx: usize) {
-            const REMAP_PAGE_FLAGS: [Flag; 4] =
-                [Flag::Present, Flag::PageSize, Flag::Global, Flag::ReadWrite];
+            const REMAP_PAGE_FLAGS: Flags = Flags::PRESENT
+                .union(Flags::BIG_PAGE)
+                .union(Flags::GLOBAL)
+                .union(Flags::WRITEABLE);
             const REMAP_PAGE_SIZE: PageSize = Level::PDPT.page_size();
             let remap_start = remap_idx * (REMAP_PAGE_SIZE.usize() * table::TABLE_LEN);
 
             for (idx, mut pdpt_ent_ref) in pdpt_ref.entry_refs().into_iter().enumerate() {
                 let remap_paddr = Addr::new(remap_start + (idx * REMAP_PAGE_SIZE.usize()));
-                unsafe { pdpt_ent_ref.reinit(remap_paddr, REMAP_PAGE_FLAGS) };
+                pdpt_ent_ref.reinit(remap_paddr, REMAP_PAGE_FLAGS);
             }
         }
 
@@ -195,15 +195,12 @@ impl MemoryManager for X86_64MemoryManager {
 
         let pml4_vaddr = Addr::new(PML4_TABLE.get() as usize);
         let mut cr3_raw = RawEntry::default();
-        unsafe {
-            EntryRef::init(
-                &mut cr3_raw,
-                Level::CR3,
-                KernelImageSpace::v2p(pml4_vaddr),
-                [],
-            )
-        }
-        .expect("cr3 fail");
+        EntryRef::init(
+            &mut cr3_raw,
+            Level::CR3,
+            KernelImageSpace::v2p(pml4_vaddr),
+            Flags::empty(),
+        );
 
         let map = X86_64MemoryMap { cr3: cr3_raw };
         set_cr3(cr3_raw);
@@ -273,8 +270,12 @@ impl X86_64MemoryMap {
         let cur_table: TableRef = cur_map.deref_mut().into();
         pml4_table_ref.raw().0[256..].copy_from_slice(&cur_table.raw().0[256..]);
 
-        unsafe { EntryRef::init(&mut cr3, Level::CR3, table_paddr, []) }
-            .expect("Flags should be valid");
+        EntryRef::init(
+            &mut cr3,
+            Level::CR3,
+            table_paddr,
+            Flags::empty(),
+        );
         Self { cr3 }
     }
 }
@@ -283,7 +284,7 @@ impl MemoryMap for X86_64MemoryMap {
         &mut self,
         vpage: PageAddr<V>,
         ppage: PageAddr<UMASpace>,
-        flags: [Flag; N],
+        flags: Flags,
         allocator: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()> {
         debug_assert!(vpage.page_size() == ppage.page_size());
@@ -417,12 +418,10 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
             EntryTarget::None | EntryTarget::Page(..) => {
                 let table_paddr = alloc.allocate(PageSize::Small.layout()).unwrap().base;
                 let table_level = self.cur_entry.level().next_level().unwrap();
-                unsafe {
-                    self.cur_entry.reinit(
-                        table_paddr.into(),
-                        DEFAULT_PAGE_TABLE_FLAGS,
-                    );
-                }
+                self.cur_entry.reinit(
+                    table_paddr.into(),
+                    DEFAULT_PAGE_TABLE_FLAGS,
+                );
                 unsafe { self.down_with_table(table_paddr, table_level) }
             },
             EntryTarget::Table(level, addr) => unsafe { self.down_with_table(addr, level) },
@@ -553,116 +552,3 @@ impl Level {
         }
     }
 }
-
-// ------------------------- Unused -----------------------------
-//
-// struct RecursiveWalker<'a, T: VirtSpace> {
-//     target_vaddr: Addr<T>,
-//     cur_entry: EntryRef<'a>,
-// }
-//
-// impl<'a, T: VirtSpace> RecursiveWalker<'a, T> {
-//     /// Creates a new [`RecursiveWalker`] to access page entries along
-// `target_vaddr`     ///
-//     /// # Safety
-//     /// This walker requires recursive paging at `RecursivePagingSpace`, and
-// the     /// paging structure pointed by `cr3` is currently loaded.
-//     unsafe fn new(cr3: EntryRef<'a>, target_vaddr: Addr<T>) -> Self {
-//         Self {
-//             target_vaddr,
-//             cur_entry: cr3,
-//         }
-//     }
-//
-//     fn cur(&mut self) -> &mut EntryRef<'a> { &mut self.cur_entry }
-//
-//     fn try_down(&mut self) -> Option<&mut EntryRef<'a>> {
-//         self.cur_entry
-//             .level()
-//             .next_level()
-//             .map(|_| self.cur_entry.target())
-//             .filter(|target| matches!(target, EntryTarget::Table(..)))
-//             .map(|_| unsafe { self.down_unchecked() })
-//     }
-//
-//     fn down(&mut self, alloc: &mut impl PageManager<UMASpace>) -> &mut
-// EntryRef<'a> {         if self.cur_entry.level().next_level().is_none() {
-//             return self.cur();
-//         }
-//
-//         let target = self.cur_entry.target();
-//         match target {
-//             EntryTarget::None | EntryTarget::Page(..) => {
-//                 let table_paddr = alloc.allocate_pages(1,
-// PageSize::Small).unwrap().base;                 unsafe {
-//                     self.cur_entry.reinit(
-//                         table_paddr.into(),
-//                         DEFAULT_PAGE_TABLE_FLAGS,
-//                     );
-//                 }
-//             },
-//             EntryTarget::Table(..) => (),
-//         }
-//         unsafe { self.down_unchecked() }
-//     }
-//
-//     unsafe fn down_unchecked(&mut self) -> &mut EntryRef<'a> {
-//         let table_level =
-//             self.cur_entry.level().next_level().expect(
-//                 "RecursiveWalker::down_unchecked should not be called when
-// walker is at lowest level",             );
-//
-//         let table_vaddr = recursive_table_vaddr(table_level,
-// self.target_vaddr);         let raw_table: &'a mut RawTable =
-//             unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
-//         let table: TableRef<'a> = unsafe { TableRef::from_raw(table_level,
-// raw_table) };
-//
-//         self.cur_entry = table.index_with_vaddr(self.target_vaddr);
-//         self.cur()
-//     }
-// }
-//
-// /// # Undefined Behavior
-// /// - `table_level` is not a valid level for page table
-// fn recursive_table_vaddr<S: VirtSpace>(
-//     table_level: Level,
-//     target_addr: Addr<S>,
-// ) -> Addr<RecursivePagingSpace> {
-//     assert!(!RecursivePagingSpace::RANGE.contains(&target_addr.usize()));
-//     const TABLE_IDX_SIZE: usize = table::TABLE_LEN.trailing_zeros() as usize;
-//     const OFFSET_IDX_SIZE: usize = table::TABLE_SIZE.trailing_zeros() as
-// usize;
-//
-//     let pml4_idx_range = Level::PML4.page_table_idx_range();
-//
-//     let recurse_base =
-// Addr::<RecursivePagingSpace>::new(RecursivePagingSpace::RANGE.start);     let
-// recurse_base = recurse_base.index_range(&pml4_idx_range);
-//     let recurse_base = recurse_base << pml4_idx_range.start;
-//
-//     // Number of "real" page table lookup
-//     let access_cnt = table_level as usize - 1;
-//     let recurse_cnt = 4 - access_cnt;
-//
-//     let mut ret: usize = 0;
-//     for i in 0..recurse_cnt {
-//         ret |= recurse_base >> (i * TABLE_IDX_SIZE);
-//     }
-//
-//     const OFFSET_MASK: usize = table::TABLE_ALIGNMENT - 1;
-//     const CANONICAL_MASK: usize = 0xFFFF_0000_0000_0000;
-//
-//     let access_base = target_addr.usize() & !CANONICAL_MASK;
-//     let access_base = access_base >> (recurse_cnt * TABLE_IDX_SIZE);
-//     let access_base = access_base & !OFFSET_MASK;
-//
-//     ret |= access_base;
-//     // RecursivePagingSpace is in upper half
-//     ret |= CANONICAL_MASK;
-//
-//     let ret = Addr::new(ret);
-//     debug_assert!(ret.is_aligned_to(table::TABLE_ALIGNMENT));
-//     ret
-// }
-//
