@@ -299,7 +299,7 @@ impl<S: AddrSpace> AddrRange<S> {
 
         let residual = self.size - (base - self.base) as usize;
         PageRange {
-            base: PageAddr::new(base, page_size),
+            base: Page::new(base, page_size),
             len: residual / page_size.usize(),
         }
     }
@@ -313,7 +313,7 @@ impl<S: AddrSpace> AddrRange<S> {
 
         let residual = self.size + (self.base - base) as usize;
         PageRange {
-            base: PageAddr::new(base, page_size),
+            base: Page::new(base, page_size),
             len: residual.div_ceil(page_size.usize()),
         }
     }
@@ -382,12 +382,12 @@ impl<S: AddrSpace> Iterator for SplitAligned<S> {
 
 /// A page aligned address.
 #[derive(Debug, Clone, Copy, Into)]
-pub struct PageAddr<S: AddrSpace> {
+pub struct Page<S: AddrSpace> {
     #[into]
     base: Addr<S>,
     page_size: PageSize,
 }
-impl<S: AddrSpace> PageAddr<S> {
+impl<S: AddrSpace> Page<S> {
     /// Creates a new page descriptor for the page at `base` of `size`
     ///
     /// # Panics
@@ -432,7 +432,7 @@ impl<S: AddrSpace> PageAddr<S> {
 #[derive(Debug, Clone, Copy)]
 pub struct PageRange<S: AddrSpace> {
     /// Starting address of the page range.
-    pub base: PageAddr<S>,
+    pub base: Page<S>,
     /// Number of pages in the page range.
     pub len: usize,
 }
@@ -444,7 +444,7 @@ impl<S: AddrSpace> Into<AddrRange<S>> for PageRange<S> {
     }
 }
 impl<S: AddrSpace> IntoIterator for PageRange<S> {
-    type Item = PageAddr<S>;
+    type Item = Page<S>;
 
     type IntoIter = impl Iterator<Item = Self::Item>;
 
@@ -455,13 +455,13 @@ impl<S: AddrSpace> IntoIterator for PageRange<S> {
         (start..)
             .step_by(step)
             .take(self.len)
-            .map(move |base| PageAddr::new(Addr::new(base), self.page_size()))
+            .map(move |base| Page::new(Addr::new(base), self.page_size()))
     }
 }
 impl<S: AddrSpace> PageRange<S> {
     /// Creates an empty page range aligned to `page_size`.
     pub const fn empty(page_size: PageSize) -> Self {
-        let base = PageAddr::new(Addr::new(S::RANGE.start), page_size);
+        let base = Page::new(Addr::new(S::RANGE.start), page_size);
         let len = 0;
         Self { base, len }
     }
@@ -477,7 +477,7 @@ impl<S: AddrSpace> PageRange<S> {
             return None;
         }
 
-        let base = PageAddr::new(range.base, page_size);
+        let base = Page::new(range.base, page_size);
         if range.size % page_size.align() != 0 {
             return None;
         }

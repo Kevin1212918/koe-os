@@ -1,7 +1,7 @@
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
-use super::addr::{PageAddr, PageSize};
+use super::addr::{Page, PageSize};
 use super::paging::MemoryManager;
 use super::phy::PhySpace;
 use super::virt::VirtSpace;

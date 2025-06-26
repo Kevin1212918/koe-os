@@ -1,7 +1,7 @@
 use core::arch::asm;
 use core::ops::Range;
 
-use addr::{Addr, AddrSpace, PageAddr};
+use addr::{Addr, AddrSpace, Page};
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;

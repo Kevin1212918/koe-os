@@ -14,7 +14,7 @@ use arraydeque::RangeArgument;
 use entry::{EntryRef, EntryTarget, RawEntry};
 use table::{RawTable, TableRef};
 
-use super::addr::{self, Addr, PageAddr, PageSize};
+use super::addr::{self, Addr, Page, PageSize};
 use super::phy::BootMemoryManager;
 use super::virt::{PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
 use super::{PageAllocator, UMASpace};
@@ -60,8 +60,8 @@ pub trait MemoryMap {
     /// - `page_size` should be supported by the `MemoryManager`
     unsafe fn map<V: VirtSpace, const N: usize>(
         &mut self,
-        vpage: PageAddr<V>,
-        ppage: PageAddr<UMASpace>,
+        vpage: Page<V>,
+        ppage: Page<UMASpace>,
         flags: Flags,
         alloc: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()>;
@@ -282,8 +282,8 @@ impl X86_64MemoryMap {
 impl MemoryMap for X86_64MemoryMap {
     unsafe fn map<V: VirtSpace, const N: usize>(
         &mut self,
-        vpage: PageAddr<V>,
-        ppage: PageAddr<UMASpace>,
+        vpage: Page<V>,
+        ppage: Page<UMASpace>,
         flags: Flags,
         allocator: &mut impl addr::Allocator<UMASpace>,
     ) -> Option<()> {

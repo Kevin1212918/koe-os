@@ -11,7 +11,7 @@ use buddy::{BuddySystem, BUDDY_MAX_ORDER};
 use memblock::MemblockSystem;
 use multiboot2::{BootInformation, MemoryArea, MemoryAreaTypeId};
 
-use super::addr::{self, Addr, AddrSpace, PageAddr, PageRange, PageSize};
+use super::addr::{self, Addr, AddrSpace, Page, PageRange, PageSize};
 use super::kernel_start_lma;
 use super::paging::{MemoryManager, MMU};
 use super::virt::PhysicalRemapSpace;
@@ -73,7 +73,7 @@ pub const FRAME_SIZE: usize = PageSize::MIN.usize();
 
 struct PhysicalMemoryRecord {
     frames: &'static mut [Frame],
-    base: PageAddr<UMASpace>,
+    base: Page<UMASpace>,
     buddy: BuddySystem,
 }
 
@@ -145,7 +145,7 @@ impl PhysicalMemoryRecord {
             .base
             .checked_page_add(frame_idx)
             .expect("index returned by buddy system should be correctly sized");
-        let base = PageAddr::new(base.addr(), page_size);
+        let base = Page::new(base.addr(), page_size);
 
         let len = allocate_cnt >> (page_size.order() - FRAME_ORDER);
         Some(PageRange { base, len })
@@ -224,7 +224,7 @@ unsafe impl addr::Allocator<UMASpace> for PhysicalMemoryManager {
         );
         let page = PageSize::fit(layout).expect("layout should fit into an allocated page");
         let alloc_range = PageRange {
-            base: PageAddr::new(addr, page),
+            base: Page::new(addr, page),
             len: 1,
         };
         unsafe { self.deallocate_pages(alloc_range) }

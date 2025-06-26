@@ -10,7 +10,7 @@ use arrayvec::ArrayVec;
 use derive_more::derive::IntoIterator;
 use multiboot2::{BootInformation, MemoryArea, MemoryAreaType};
 
-use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageAddr, PageRange, PageSize};
+use crate::mem::addr::{Addr, AddrRange, AddrSpace, Page, PageRange, PageSize};
 use crate::mem::{kernel_end_lma, kernel_start_lma, UMASpace};
 
 pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {
