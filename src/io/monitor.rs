@@ -1,8 +1,6 @@
-use core::fmt::Write as _;
 
 use super::keyboard::keycode::*;
 use super::keyboard::{KeyEvent, Keyboard, Modifier};
-use crate::common::hlt;
 use crate::drivers::vga::VGA_BUFFER;
 
 pub struct Monitor<'kb> {

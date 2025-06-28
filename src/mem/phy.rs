@@ -9,15 +9,13 @@ use core::usize;
 
 use buddy::{BuddySystem, BUDDY_MAX_ORDER};
 use memblock::MemblockSystem;
-use multiboot2::{BootInformation, MemoryArea, MemoryAreaTypeId};
+use multiboot2::BootInformation;
 
 use super::addr::{self, Addr, AddrSpace, Page, PageRange, PageSize};
-use super::kernel_start_lma;
-use super::paging::{MemoryManager, MMU};
+use super::paging::MemoryManager;
 use super::virt::PhysicalRemapSpace;
-use crate::common::{hlt, TiB};
+use crate::common::TiB;
 use crate::mem::addr::AddrRange;
-use crate::mem::{kernel_end_lma, paging};
 
 mod buddy;
 mod memblock;

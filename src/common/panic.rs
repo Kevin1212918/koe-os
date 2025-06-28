@@ -1,4 +1,3 @@
-use core::fmt::Write as _;
 use core::panic::PanicInfo;
 
 use crate::common::{hlt, log};

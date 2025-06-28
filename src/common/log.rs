@@ -1,11 +1,9 @@
-use core::borrow::BorrowMut as _;
-use core::cell::Cell;
 use core::fmt::{Arguments, Write};
 
 pub use mac::*;
 
 use crate::drivers::serial;
-use crate::drivers::vga::{Color, VGABuffer, VGA_BUFFER};
+use crate::drivers::vga::{Color, VGA_BUFFER};
 pub mod mac {
     macro_rules! ok {
         ($($arg:tt)*) => {

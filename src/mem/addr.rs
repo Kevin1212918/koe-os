@@ -1,12 +1,11 @@
 use core::alloc::Layout;
 use core::marker::PhantomData;
-use core::ops::{Add, Deref, DerefMut, Range, Sub};
+use core::ops::{Add, Range, Sub};
 
 use derive_more::derive::Into;
 use strum::VariantArray;
 
 use super::virt::VirtSpace;
-use crate::common::{GiB, KiB, MiB};
 
 /// An address space with constant evaluated address bounds. All addresses are
 /// within an address space, and addresses derived from address operations will

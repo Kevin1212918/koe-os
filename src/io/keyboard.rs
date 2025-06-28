@@ -1,4 +1,3 @@
-use arraydeque::ArrayDeque;
 use bitflags::bitflags;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;

@@ -1,16 +1,12 @@
 //! x86-64 4 level ordinary paging
 
-use alloc::alloc::Global;
-use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::alloc::{Allocator, Layout};
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::fmt::Write as _;
-use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut, Range};
-use core::ptr::{self, NonNull};
-use core::sync::atomic::AtomicBool;
+use core::ops::{Deref, Range};
+use core::ptr::{self};
 
 use arraydeque::RangeArgument;
 use derive_more::derive::From;
@@ -19,13 +15,11 @@ use table::{RawTable, TableRef};
 
 use super::addr::{self, Addr, Page, PageSize};
 use super::phy::BootMemoryManager;
-use super::virt::{PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
+use super::virt::{PhysicalRemapSpace, VirtSpace};
 use super::{PageAllocator, UMASpace};
-use crate::common::hlt;
 use crate::mem::addr::{AddrSpace, Allocator as _};
-use crate::mem::phy::PhySpace;
-use crate::mem::virt::{DataStackSpace, KernelImageSpace};
-use crate::mem::{kernel_end_vma, kernel_size};
+use crate::mem::kernel_end_vma;
+use crate::mem::virt::KernelImageSpace;
 
 mod entry;
 mod table;

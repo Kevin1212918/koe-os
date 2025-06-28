@@ -1,12 +1,11 @@
 use core::arch::asm;
 use core::ops::Range;
 
-use addr::{Addr, AddrSpace, Page};
+use addr::Addr;
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use paging::{Flags, MemoryManager, MMU};
 use virt::KernelImageSpace;
 
 
@@ -16,13 +15,13 @@ mod paging;
 mod phy;
 mod virt;
 
-pub use alloc::{GlobalAllocator, PageAllocator};
+pub use alloc::PageAllocator;
 
-pub use paging::{X86_64MemoryManager, X86_64MemoryMap};
+pub use paging::X86_64MemoryMap;
 pub use phy::UMASpace;
 pub use virt::PhysicalRemapSpace;
 
-use crate::common::{hlt, Privilege};
+use crate::common::Privilege;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 

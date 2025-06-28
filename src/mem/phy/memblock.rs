@@ -1,16 +1,11 @@
-use alloc::alloc::{AllocError, Allocator};
-use core::alloc::Layout;
 use core::cell::SyncUnsafeCell;
-use core::fmt::Write as _;
 use core::iter::{self, Peekable};
 use core::mem::MaybeUninit;
-use core::ops::Deref;
 
 use arrayvec::ArrayVec;
-use derive_more::derive::IntoIterator;
-use multiboot2::{BootInformation, MemoryArea, MemoryAreaType};
+use multiboot2::{BootInformation, MemoryAreaType};
 
-use crate::mem::addr::{Addr, AddrRange, AddrSpace, Page, PageRange, PageSize};
+use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageSize};
 use crate::mem::{kernel_end_lma, kernel_start_lma, UMASpace};
 
 pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {

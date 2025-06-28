@@ -1,17 +1,16 @@
-use core::arch::{asm, global_asm};
+use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
 use core::sync::atomic::{self, AtomicUsize};
-use core::{array, ptr};
 
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
-use handler::{exception_handler, ISR_TABLE};
+use handler::ISR_TABLE;
 use pic::init_pic;
 use spin::Mutex;
 
-use crate::common::{hlt, Privilege};
+use crate::common::Privilege;
 
 mod handler;
 mod pic;

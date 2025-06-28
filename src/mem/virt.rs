@@ -9,9 +9,8 @@
 //! |0xFFFFFFFF80000000:0xFFFFFFFFFF600000|Kernel Text/Data           |       |
 
 use core::ops::Range;
-use core::sync::atomic::AtomicUsize;
 
-use super::addr::{Addr, AddrSpace, PageRange};
+use super::addr::{Addr, AddrSpace};
 use super::UMASpace;
 use crate::mem::phy;
 

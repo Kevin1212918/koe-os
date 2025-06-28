@@ -16,21 +16,14 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::vec;
-use core::ffi::CStr;
-use core::fmt::Write;
-use core::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
+use core::ptr::slice_from_raw_parts_mut;
 
 use common::{hlt, log};
-use drivers::ps2;
-use io::monitor::Monitor;
 use multiboot2::{BootInformation, BootInformationHeader};
 
 use crate::common::log::{error, ok};
 use crate::drivers::serial;
-use crate::fs::{File, FileSystem};
-use crate::mem::addr::Addr;
-use crate::mem::{PhysicalRemapSpace, UMASpace};
+use crate::mem::PhysicalRemapSpace;
 
 mod boot;
 mod common;

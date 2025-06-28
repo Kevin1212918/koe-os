@@ -1,14 +1,9 @@
 use core::cell::SyncUnsafeCell;
-use core::fmt::Write as _;
 
-use arraydeque::ArrayDeque;
-use arrayvec::ArrayVec;
-use ringbuf::traits::{Consumer, Producer, Split, SplitRef};
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb as Rb;
 
 use crate::common::pmio::{inb, Port, RPort, WPort};
-use crate::drivers::vga::VGA_BUFFER;
-use crate::interrupt::InterruptGuard;
 use crate::io::keyboard::keycode::*;
 use crate::io::keyboard::{KeyEvent, Keyboard, VirtKeyboard};
 

@@ -1,6 +1,4 @@
 use bitflags::{bitflags, Flags as _};
-use bitvec::order::Lsb0;
-use bitvec::view::BitView;
 use derive_more::derive::{From, Into};
 
 use super::Level;

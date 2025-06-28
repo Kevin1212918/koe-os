@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
-use super::{FileSystem, INode, Result};
+use super::{FileSystem, INode};
 
 // TODO: Support multiple mounts
 pub struct Vfs {

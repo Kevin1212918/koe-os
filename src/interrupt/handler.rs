@@ -1,15 +1,10 @@
 use core::arch::global_asm;
-use core::cell::SyncUnsafeCell;
-use core::fmt::Write as _;
-use core::mem::MaybeUninit;
-use core::ptr;
 
 use super::pic::ack;
 use super::{InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF, VECTOR_PIC};
 use crate::common::log::error;
 use crate::common::{hlt, log};
 use crate::drivers::ps2;
-use crate::drivers::vga::VGA_BUFFER;
 
 
 #[repr(transparent)]

@@ -3,7 +3,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::ffi::CStr;
-use core::{ptr, slice, str};
+use core::{slice, str};
 
 use bitflags::bitflags;
 
