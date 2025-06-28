@@ -11,6 +11,7 @@
     const_alloc_layout
 )]
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::missing_unsafe_doc)]
 
 extern crate alloc;
 

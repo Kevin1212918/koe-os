@@ -38,7 +38,7 @@ extern "C" {
 pub fn init(boot_info: BootInformation) {
     init_gdtr();
     let bmm = phy::init_boot_mem(&boot_info);
-    MMU.call_once(|| X86_64MemoryManager::init(&bmm));
+    paging::init(&bmm);
     phy::init(bmm);
 }
 

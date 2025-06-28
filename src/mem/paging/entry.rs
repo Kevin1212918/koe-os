@@ -139,16 +139,40 @@ impl<'a> EntryRef<'a> {
 
     /// Constructs a `EntryRef` from `Level` and `RawEntry`.
     ///
-    /// Note `raw` may or may not be specified.
-    pub fn from_raw(raw: &'a mut RawEntry, level: Level) -> Self { Self { raw, level } }
+    /// This function is mainly useful for reconstructing `EntryRef` from
+    /// already specified `RawEntry`.
+    ///
+    /// Note that while `raw` may or may not be specified, using `EntryRef` in
+    /// any useful capacity forms requires the entry be specified through
+    /// [`EntryRef::init`] or [`EntryRef::reinit`], and that the `Level` is
+    /// correct.
+    ///
+    /// # Safety
+    /// Before any functions except for [`EntryRef::init`] or
+    /// [`EntryRef::reinit`] is called using the underlying raw entry, it is
+    /// caller's responsibility to ensure the entry is properly specified.
+    ///
+    /// In addition, see [`EntryRef::init`] on safety of `level`.
+    pub unsafe fn from_raw(raw: &'a mut RawEntry, level: Level) -> Self { Self { raw, level } }
 
     /// Specifies a `RawEntry` with given flags at `raw`, and return an
     /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
     ///
     /// # Undefined Behavior
     /// The `flags` should not contain any unspecified bits.
-    pub fn init(raw: &'a mut RawEntry, level: Level, addr: Addr<UMASpace>, flags: Flags) -> Self {
-        let mut new = Self::from_raw(raw, level);
+    ///
+    /// # Safety
+    /// If the underlying raw entry is in the paging structure, caller should
+    /// ensure `level` is the correct `Level` of the containing table (or
+    /// cr3).
+    pub unsafe fn init(
+        raw: &'a mut RawEntry,
+        level: Level,
+        addr: Addr<UMASpace>,
+        flags: Flags,
+    ) -> Self {
+        // SAFETY: Specifying the raw entry.
+        let mut new = unsafe { Self::from_raw(raw, level) };
         new.reinit(addr, flags);
         new
     }

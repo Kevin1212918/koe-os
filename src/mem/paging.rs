@@ -2,15 +2,18 @@
 
 use alloc::alloc::Global;
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::alloc::{Allocator, Layout};
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::fmt::Write as _;
-use core::ops::{DerefMut, Range};
+use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut, Range};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicBool;
 
 use arraydeque::RangeArgument;
+use derive_more::derive::From;
 use entry::{EntryRef, EntryTarget, RawEntry};
 use table::{RawTable, TableRef};
 
@@ -19,7 +22,8 @@ use super::phy::BootMemoryManager;
 use super::virt::{PhysicalRemapSpace, RecursivePagingSpace, VirtSpace};
 use super::{PageAllocator, UMASpace};
 use crate::common::hlt;
-use crate::mem::addr::AddrSpace;
+use crate::mem::addr::{AddrSpace, Allocator as _};
+use crate::mem::phy::PhySpace;
 use crate::mem::virt::{DataStackSpace, KernelImageSpace};
 use crate::mem::{kernel_end_vma, kernel_size};
 
@@ -28,38 +32,87 @@ mod table;
 
 pub use entry::Flags;
 
+pub fn init(bmm: &BootMemoryManager) -> impl MemoryManager { x86_64_init(bmm) }
+
+/// Smart shared reference to a memory map.
+#[derive(Clone, From)]
+pub enum MapRef<M: MemoryMap> {
+    Static(&'static M),
+    Arc(Arc<M>),
+}
+impl<M: MemoryMap> Deref for MapRef<M> {
+    type Target = M;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            MapRef::Static(r) => r,
+            MapRef::Arc(r) => r,
+        }
+    }
+}
+
+/// Per-CPU structure managing the CPU's page mapping.
+///
+/// A `MemoryManager` always holds reference to one `MemoryMap`, which contains
+/// the active memory mapping. On initialization, `MemoyManager` starts with a
+/// map already loaded.
 pub trait MemoryManager {
     type Map: MemoryMap;
 
-    /// Initialize `MemoryManager`.
-    ///
-    /// This also creates an initial memory map.
-    fn init(bmm: &BootMemoryManager) -> Self;
-
     /// Swap out the current memory map with `new`.
-    fn swap(&self, new: Self::Map) -> Self::Map;
+    ///
+    /// # Safety
+    /// While this function is safe, the caller should uphold the safety
+    /// guarentees from [`MemoryMap::map`].
+    fn swap(&mut self, new: MapRef<Self::Map>);
 
     /// Borrow the current memory map.
-    fn map(&self) -> impl DerefMut<Target = Self::Map>;
+    fn map(&mut self) -> &Self::Map;
 
     /// Flush the changes to current memory map.
-    fn flush(&self);
+    ///
+    /// # Note
+    /// This should be called when the kernel mapping or the currently mapped
+    /// user mapping is changed.
+    fn flush(&mut self);
 }
 
-pub trait MemoryMap {
+/// A swappable set of page mappings.
+///
+/// A `MemoryMap` reference is held by [`MemoryManager`] to determine the
+/// active user mapping.
+///
+/// Kernel page mapping are shared across `MemoryMap`s. Any modification to
+/// kernel mapping in a map will reflect to all other maps. User mappings are
+/// unique to a `MemoryMap`, which can be swapped using [`MemoryManager::swap`]
+///
+/// Note that since a `MemoryMap` will be modified from multiple cores, it
+/// implements [`Sync`] and [`Send`]
+pub trait MemoryMap: 'static + Sync + Send {
+    /// Create a new `MemoryMap`.
+    ///
+    /// # Panics
+    /// - If [`paging::init`] has not returned, this will panic.
+    fn new() -> Self;
+
     /// Maps a virtual page of size `page_size` to `paddr`. Overwrite any
     /// previous virtual page mapping at `vaddr`.
     ///
     /// # Safety
-    /// - Virtual memory page of size `page_size` pointed by `vaddr` does not
-    /// contain any live reference or owned values.
-    /// - Physical memory page of size `page_size` pointed by `paddr` does not
-    /// contain any live reference or owned values.
+    /// Paging operations are fundamentally unsafe. All of Rust's safety
+    /// guarentees should be justified when calling this function, among
+    /// those:
+    /// - Mutable references cannot alias,
+    /// - References points to valid values.
+    ///
+    /// Note however the user processes may not need such strong guarentees,
+    /// unless they are explicitly accessed in kernel code.
     ///
     /// # Panics
-    /// - `page_size` should be supported by the `MemoryManager`
+    /// - `page_size` should be supported by the `MemoryManager`. We cant do
+    ///   large pages yet.
     unsafe fn map<V: VirtSpace, const N: usize>(
-        &mut self,
+        &self,
         vpage: Page<V>,
         ppage: Page<UMASpace>,
         flags: Flags,
@@ -69,17 +122,15 @@ pub trait MemoryMap {
     /// Removes mapping at `vaddr`.
     ///
     /// # Safety
-    /// - `vaddr` is the base of a mapped `VPage` through this `MemoryManager`
-    /// - The previously mapped virtual memory page pointed by `vaddr` does not
-    /// contain any live reference or owned values.
+    /// See [`MemoryMap::map`] for safety requirements.
     ///
-    /// # Panics
-    /// May panic if `vaddr` is not mapped.
-    unsafe fn unmap<V: VirtSpace>(&mut self, vaddr: Addr<V>);
+    /// # Undefined Behavior
+    /// The page at `vaddr` should be mapped.
+    unsafe fn unmap<V: VirtSpace>(&self, vaddr: Addr<V>);
 
     /// Try translating a virtual address into a physical address. Fails iff
     /// the virtual address is not mapped.
-    fn translate<V: VirtSpace>(&mut self, vaddr: Addr<V>) -> Option<Addr<UMASpace>>;
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<UMASpace>>;
 }
 
 //---------------------------- x86-64 stuff below ---------------------------//
@@ -90,133 +141,151 @@ pub static KERNEL_MAP_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
 const DEFAULT_PAGE_TABLE_FLAGS: Flags = Flags::PRESENT.union(Flags::WRITEABLE);
 
-pub struct X86_64MemoryManager(spin::Mutex<X86_64MemoryMap>);
+const KERNEL_TABLES_CNT: usize = 256;
 
-impl MemoryManager for X86_64MemoryManager {
-    type Map = X86_64MemoryMap;
+static DEFAULT_KERNEL_MAP: spin::Once<X86_64MemoryMap> = spin::Once::new();
 
-    fn init(bmm: &BootMemoryManager) -> Self {
-        static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
-        static PDPT_TABLES: SyncUnsafeCell<[RawTable; 256]> =
-            SyncUnsafeCell::new([const { RawTable::default() }; 256]);
+/// Initalize kernel paging and memory managers.
+///
+/// Need to static initialize some starting pages before physical pages can be
+/// mapped dynamically.
+///
+/// All of PhysicalRemapSpace, KernelImageSpace, and kernel pdpts are statically
+/// allocated and should not be returned to allocators.
+fn x86_64_init(bmm: &BootMemoryManager) -> X86_64MemoryManager {
+    static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
+    static PDPT_TABLES: SyncUnsafeCell<[RawTable; KERNEL_TABLES_CNT]> =
+        SyncUnsafeCell::new([const { RawTable::default() }; KERNEL_TABLES_CNT]);
 
-        fn init_kernel_pdpt(pdpt_ref: TableRef<'_>) {
-            static KERNEL_PD_TABLE: SyncUnsafeCell<RawTable> =
-                SyncUnsafeCell::new(RawTable::default());
+    fn init_kernel_pdpt(pdpt_ref: TableRef<'_>) {
+        static KERNEL_PD_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
 
-            let kernel_space_start = Addr::new(KernelImageSpace::RANGE.start);
-            let mut pdpt_ent_ref = pdpt_ref.index_with_vaddr(kernel_space_start);
-            pdpt_ent_ref.reinit(
-                KernelImageSpace::v2p(Addr::new(KERNEL_PD_TABLE.get() as usize)),
-                DEFAULT_PAGE_TABLE_FLAGS,
-            );
+        let kernel_space_start = Addr::new(KernelImageSpace::RANGE.start);
+        let mut pdpt_ent_ref = pdpt_ref.index_with_vaddr(kernel_space_start);
+        pdpt_ent_ref.reinit(
+            KernelImageSpace::v2p(Addr::new(KERNEL_PD_TABLE.get() as usize)),
+            DEFAULT_PAGE_TABLE_FLAGS,
+        );
 
-            const KERNEL_PAGE_SIZE: PageSize = Level::PD.page_size();
-            const KERNEL_PAGE_FLAGS: Flags = Flags::PRESENT
-                .union(Flags::BIG_PAGE)
-                .union(Flags::GLOBAL)
-                .union(Flags::WRITEABLE);
+        const KERNEL_PAGE_SIZE: PageSize = Level::PD.page_size();
+        const KERNEL_PAGE_FLAGS: Flags = Flags::PRESENT
+            .union(Flags::BIG_PAGE)
+            .union(Flags::GLOBAL)
+            .union(Flags::WRITEABLE);
 
-            let mut pd_ref = unsafe {
-                TableRef::from_raw(
-                    Level::PD,
-                    KERNEL_PD_TABLE.get().as_mut_unchecked(),
-                )
-            };
-            let mut kernel_page_vaddr = kernel_space_start;
-            while kernel_page_vaddr < kernel_end_vma() {
-                let kernel_page_paddr = KernelImageSpace::v2p(kernel_page_vaddr);
-                let mut pd_ent_ref = pd_ref.reborrow().index_with_vaddr(kernel_page_vaddr);
-                unsafe { pd_ent_ref.reinit(kernel_page_paddr, KERNEL_PAGE_FLAGS) };
-
-                kernel_page_vaddr = kernel_page_vaddr + KERNEL_PAGE_SIZE.usize();
-            }
-        }
-
-        fn init_physical_remap_pdpt(pdpt_ref: TableRef<'_>, remap_idx: usize) {
-            const REMAP_PAGE_FLAGS: Flags = Flags::PRESENT
-                .union(Flags::BIG_PAGE)
-                .union(Flags::GLOBAL)
-                .union(Flags::WRITEABLE);
-            const REMAP_PAGE_SIZE: PageSize = Level::PDPT.page_size();
-            let remap_start = remap_idx * (REMAP_PAGE_SIZE.usize() * table::TABLE_LEN);
-
-            for (idx, mut pdpt_ent_ref) in pdpt_ref.entry_refs().into_iter().enumerate() {
-                let remap_paddr = Addr::new(remap_start + (idx * REMAP_PAGE_SIZE.usize()));
-                pdpt_ent_ref.reinit(remap_paddr, REMAP_PAGE_FLAGS);
-            }
-        }
-
-        let pdpt_table_iter = unsafe {
-            PDPT_TABLES
-                .get()
-                .as_mut_unchecked()
-                .iter_mut()
-                .map(|x| TableRef::from_raw(Level::PDPT, x))
+        let mut pd_ref = unsafe {
+            TableRef::from_raw(
+                Level::PD,
+                KERNEL_PD_TABLE.get().as_mut_unchecked(),
+            )
         };
-        for (idx, mut table) in pdpt_table_iter.enumerate() {
-            // offset the idx by 256 since the preallocated pdpts are for kernel pages.
-            let idx = idx + 256;
+        let mut kernel_page_vaddr = kernel_space_start;
+        while kernel_page_vaddr < kernel_end_vma() {
+            let kernel_page_paddr = KernelImageSpace::v2p(kernel_page_vaddr);
+            let mut pd_ent_ref = pd_ref.reborrow().index_with_vaddr(kernel_page_vaddr);
+            pd_ent_ref.reinit(kernel_page_paddr, KERNEL_PAGE_FLAGS);
 
-            let kernel_page_idx = Addr::<KernelImageSpace>::new(KernelImageSpace::RANGE.start)
-                .index_range(&Level::PML4.page_table_idx_range());
-            let remap_page_start = Addr::<PhysicalRemapSpace>::new(PhysicalRemapSpace::RANGE.start)
-                .index_range(&Level::PML4.page_table_idx_range());
-            let remap_page_end = usize::min(
-                PhysicalRemapSpace::RANGE.end - 1,
-                PhysicalRemapSpace::RANGE.start + bmm.managed_range().size - 1,
-            );
-            let remap_page_end = Addr::<PhysicalRemapSpace>::new(remap_page_end)
-                .index_range(&Level::PML4.page_table_idx_range());
+            kernel_page_vaddr = kernel_page_vaddr + KERNEL_PAGE_SIZE.usize();
+        }
+    }
 
-            if idx == kernel_page_idx {
-                init_kernel_pdpt(table.reborrow());
-            } else if remap_page_start <= idx && idx <= remap_page_end {
-                init_physical_remap_pdpt(table.reborrow(), idx - remap_page_start);
-            }
+    fn init_physical_remap_pdpt(pdpt_ref: TableRef<'_>, remap_idx: usize) {
+        const REMAP_PAGE_FLAGS: Flags = Flags::PRESENT
+            .union(Flags::BIG_PAGE)
+            .union(Flags::GLOBAL)
+            .union(Flags::WRITEABLE);
+        const REMAP_PAGE_SIZE: PageSize = Level::PDPT.page_size();
+        let remap_start = remap_idx * (REMAP_PAGE_SIZE.usize() * table::TABLE_LEN);
 
-            let pdpt_table_vaddr = Addr::new(ptr::from_mut(table.raw()) as usize);
-            let pdpt_table_paddr = KernelImageSpace::v2p(pdpt_table_vaddr);
+        for (idx, mut pdpt_ent_ref) in pdpt_ref.entry_refs().into_iter().enumerate() {
+            let remap_paddr = Addr::new(remap_start + (idx * REMAP_PAGE_SIZE.usize()));
+            pdpt_ent_ref.reinit(remap_paddr, REMAP_PAGE_FLAGS);
+        }
+    }
 
-            let pml4_ref = unsafe {
-                TableRef::from_raw(
-                    Level::PML4,
-                    PML4_TABLE.get().as_mut_unchecked(),
-                )
-            };
-            let mut pml4_ent_ref = pml4_ref.index(idx);
-            unsafe {
-                pml4_ent_ref.reinit(
-                    pdpt_table_paddr,
-                    DEFAULT_PAGE_TABLE_FLAGS,
-                )
-            };
+    let pdpt_table_iter = unsafe {
+        PDPT_TABLES
+            .get()
+            .as_mut_unchecked()
+            .iter_mut()
+            .map(|x| TableRef::from_raw(Level::PDPT, x))
+    };
+    for (idx, mut table) in pdpt_table_iter.enumerate() {
+        // offset the idx by KERNEL_TABLES_CNT since the preallocated pdpts are for
+        // kernel pages.
+        let idx = idx + KERNEL_TABLES_CNT;
+
+        let kernel_page_idx = Addr::<KernelImageSpace>::new(KernelImageSpace::RANGE.start)
+            .index_range(&Level::PML4.page_table_idx_range());
+        let remap_page_start = Addr::<PhysicalRemapSpace>::new(PhysicalRemapSpace::RANGE.start)
+            .index_range(&Level::PML4.page_table_idx_range());
+        let remap_page_end = usize::min(
+            PhysicalRemapSpace::RANGE.end - 1,
+            PhysicalRemapSpace::RANGE.start + bmm.managed_range().size - 1,
+        );
+        let remap_page_end = Addr::<PhysicalRemapSpace>::new(remap_page_end)
+            .index_range(&Level::PML4.page_table_idx_range());
+
+        if idx == kernel_page_idx {
+            init_kernel_pdpt(table.reborrow());
+        } else if remap_page_start <= idx && idx <= remap_page_end {
+            init_physical_remap_pdpt(table.reborrow(), idx - remap_page_start);
         }
 
-        let pml4_vaddr = Addr::new(PML4_TABLE.get() as usize);
-        let mut cr3_raw = RawEntry::default();
+        let pdpt_table_vaddr = Addr::new(ptr::from_mut(table.raw()) as usize);
+        let pdpt_table_paddr = KernelImageSpace::v2p(pdpt_table_vaddr);
+
+        let pml4_ref = unsafe {
+            TableRef::from_raw(
+                Level::PML4,
+                PML4_TABLE.get().as_mut_unchecked(),
+            )
+        };
+        let mut pml4_ent_ref = pml4_ref.index(idx);
+        pml4_ent_ref.reinit(
+            pdpt_table_paddr,
+            DEFAULT_PAGE_TABLE_FLAGS,
+        );
+    }
+
+    let pml4_vaddr = Addr::new(PML4_TABLE.get() as usize);
+    let mut cr3_raw = RawEntry::default();
+
+
+    unsafe {
         EntryRef::init(
             &mut cr3_raw,
             Level::CR3,
             KernelImageSpace::v2p(pml4_vaddr),
             Flags::empty(),
-        );
+        )
+    };
 
-        let map = X86_64MemoryMap { cr3: cr3_raw };
-        set_cr3(cr3_raw);
-        let memory_manager = X86_64MemoryManager(spin::Mutex::new(map));
+    DEFAULT_KERNEL_MAP.call_once(|| X86_64MemoryMap {
+        cr3: spin::Mutex::new(cr3_raw),
+    });
 
-        memory_manager
+    set_cr3(cr3_raw);
+    let memory_manager = X86_64MemoryManager(MapRef::from(unsafe {
+        DEFAULT_KERNEL_MAP.get_unchecked()
+    }));
+    memory_manager
+}
+
+pub struct X86_64MemoryManager(MapRef<X86_64MemoryMap>);
+
+impl MemoryManager for X86_64MemoryManager {
+    type Map = X86_64MemoryMap;
+
+    fn swap(&mut self, new: MapRef<X86_64MemoryMap>) {
+        self.0 = new;
+        set_cr3(self.0.cr3.lock().clone());
+        self.flush();
     }
 
-    fn swap(&self, new: Self::Map) -> Self::Map {
-        let mut map = self.0.lock();
-        core::mem::replace(map.deref_mut(), new)
-    }
+    fn map(&mut self) -> &X86_64MemoryMap { &self.0 }
 
-    fn map(&self) -> impl DerefMut<Target = Self::Map> { self.0.lock() }
-
-    fn flush(&self) { flush_tlb(); }
+    fn flush(&mut self) { flush_tlb(); }
 }
 
 fn set_cr3(entry: RawEntry) { unsafe { asm!("mov cr3, {}", in(reg) entry.0) }; }
@@ -236,26 +305,73 @@ fn flush_tlb() {
     }
 }
 
+// FIXME: When map operations preempt each other, multiple mutable references
+// to kernel page table may exist at the same time.
+
 /// A memory mapping that is represented by a cr3 entry.
 ///
 /// The cr3 entry points to a PML4 table, which holds both kernel and userspace
 /// mapping. Kernel mapping is shared across all [`X86_64MemoryMap`]s, and is
 /// not dropped when [`X86_64MemoryMap`] is dropped.
-///
-/// FIXME: When map operations preempt each other, multiple mutable references
-/// to kernel page table may exist at the same time.
 pub struct X86_64MemoryMap {
-    cr3: RawEntry,
+    cr3: spin::Mutex<RawEntry>,
 }
 impl X86_64MemoryMap {
-    pub fn new(mmu: &X86_64MemoryManager) -> Self {
-        let mut cr3 = RawEntry::default();
-        let table_ptr = PageAllocator
-            .allocate_zeroed(Layout::new::<RawTable>())
-            .expect("Allocation failed!");
-        let table_vaddr: Addr<PhysicalRemapSpace> =
-            Addr::new(table_ptr.cast::<RawTable>().as_ptr() as usize);
-        let table_paddr = PhysicalRemapSpace::v2p(table_vaddr);
+    /// Call a continuation closure with the underlying cr3 `EntryRef` while
+    /// locked.
+    fn using_entry_ref<F, T>(&self, cont: F) -> T
+    where
+        F: FnOnce(EntryRef<'_>) -> T,
+    {
+        let mut cr3 = self.cr3.lock();
+        let entry_ref = unsafe { EntryRef::from_raw(&mut cr3, Level::CR3) };
+        cont(entry_ref)
+    }
+
+    /// Call a continuation closure with the underlying top-level `TableRef`
+    /// while locked.
+    fn using_table_ref<F, T>(&self, cont: F) -> T
+    where
+        F: FnOnce(TableRef<'_>) -> T,
+    {
+        self.using_entry_ref(|entry_ref| {
+            let EntryTarget::Table(level, addr) = entry_ref.target() else {
+                unreachable!()
+            };
+            let table_vaddr = PhysicalRemapSpace::p2v(addr);
+            let raw_table = unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
+            let table_ref = unsafe { TableRef::from_raw(level, raw_table) };
+            cont(table_ref)
+        })
+    }
+}
+
+/// Allocate a page table. Returns both virtual and physical addresses.
+fn allocate_table() -> (Addr<impl VirtSpace>, Addr<UMASpace>) {
+    let table_ptr = PageAllocator
+        .allocate_zeroed(Layout::new::<RawTable>())
+        .expect("Allocation failed!");
+    let table_vaddr: Addr<PhysicalRemapSpace> =
+        Addr::new(table_ptr.cast::<RawTable>().as_ptr() as usize);
+    let table_paddr = PhysicalRemapSpace::v2p(table_vaddr);
+    (table_vaddr, table_paddr)
+}
+/// Deallocate a page table.
+unsafe fn deallocate_table(ptr: *mut RawTable) {
+    let vaddr = Addr::from_mut_ptr(ptr);
+    let paddr = PhysicalRemapSpace::v2p(vaddr);
+    unsafe {
+        addr::Allocator::deallocate(
+            &PageAllocator,
+            paddr,
+            Layout::new::<RawTable>(),
+        )
+    }
+}
+
+impl MemoryMap for X86_64MemoryMap {
+    fn new() -> Self {
+        let (table_vaddr, table_paddr) = allocate_table();
 
         let pml4_table_ref = unsafe {
             TableRef::from_raw(
@@ -264,24 +380,30 @@ impl X86_64MemoryMap {
             )
         };
 
-        // Copy over kernel pages
-        // TODO: Fix hardcoded idxs for kernel pages.
-        let mut cur_map = mmu.map();
-        let cur_table: TableRef = cur_map.deref_mut().into();
-        pml4_table_ref.raw().0[256..].copy_from_slice(&cur_table.raw().0[256..]);
+        // Copy over kernel page tables from the default map.
+        let cur_map = DEFAULT_KERNEL_MAP.get().unwrap();
 
-        EntryRef::init(
-            &mut cr3,
-            Level::CR3,
-            table_paddr,
-            Flags::empty(),
-        );
-        Self { cr3 }
+        cur_map.using_table_ref(move |table_ref: TableRef| {
+            pml4_table_ref.raw().0[KERNEL_TABLES_CNT..]
+                .copy_from_slice(&table_ref.raw().0[KERNEL_TABLES_CNT..]);
+
+            let mut cr3 = RawEntry::default();
+            unsafe {
+                EntryRef::init(
+                    &mut cr3,
+                    Level::CR3,
+                    table_paddr,
+                    Flags::empty(),
+                )
+            };
+            X86_64MemoryMap {
+                cr3: spin::Mutex::new(cr3),
+            }
+        })
     }
-}
-impl MemoryMap for X86_64MemoryMap {
+
     unsafe fn map<V: VirtSpace, const N: usize>(
-        &mut self,
+        &self,
         vpage: Page<V>,
         ppage: Page<UMASpace>,
         flags: Flags,
@@ -293,43 +415,49 @@ impl MemoryMap for X86_64MemoryMap {
             _kernel_map_guard = Some(KERNEL_MAP_LOCK.lock());
         }
 
-        let mut walker = unsafe { LinearWalker::new(self.into(), vpage.start()) };
+        self.using_entry_ref(|cr3| {
+            let mut walker = unsafe { LinearWalker::new(cr3, vpage.start()) };
 
-        let mut cur_level = walker.cur().level();
-        let target_level = Level::from_page_size(vpage.page_size());
+            let mut cur_level = walker.cur().level();
+            let target_level = Level::from_page_size(vpage.page_size());
 
-        while cur_level != target_level {
-            walker.down(allocator);
-            cur_level = walker.cur().level();
-        }
+            while cur_level != target_level {
+                walker.down(allocator);
+                cur_level = walker.cur().level();
+            }
 
-        unsafe { walker.cur().reinit(ppage.start(), flags) };
+            walker.cur().reinit(ppage.start(), flags);
+        });
+        drop(_kernel_map_guard);
         Some(())
     }
 
+    unsafe fn unmap<V: VirtSpace>(&self, vaddr: Addr<V>) { todo!() }
 
-    unsafe fn unmap<V: VirtSpace>(&mut self, vaddr: Addr<V>) { todo!() }
-
-    fn translate<V: VirtSpace>(&mut self, vaddr: Addr<V>) -> Option<Addr<UMASpace>> {
+    fn translate<V: VirtSpace>(&self, vaddr: Addr<V>) -> Option<Addr<UMASpace>> {
         let mut _kernel_map_guard = None;
         if V::IS_KERNEL {
             _kernel_map_guard = Some(KERNEL_MAP_LOCK.lock());
         }
 
-        let mut walker = unsafe { LinearWalker::new(self.into(), vaddr) };
+        let ret = self.using_entry_ref(|cr3| {
+            let mut walker = unsafe { LinearWalker::new(cr3, vaddr) };
 
-        while walker.try_down().is_some() {}
+            while walker.try_down().is_some() {}
 
-        match walker.cur().target() {
-            EntryTarget::None => None,
-            EntryTarget::Page(_, addr) => Some(addr),
-            EntryTarget::Table(..) => unreachable!(),
-        }
+            match walker.cur().target() {
+                EntryTarget::None => None,
+                EntryTarget::Page(_, addr) => Some(addr),
+                EntryTarget::Table(..) => unreachable!(),
+            }
+        });
+        drop(_kernel_map_guard);
+        ret
     }
 }
 impl Drop for X86_64MemoryMap {
     fn drop(&mut self) {
-        // Dont call this on kernel page!
+        // NOTE: Dont call this on kernel page!
         fn drop_entry_target(ent: EntryRef<'_>) {
             let EntryTarget::Table(level, addr) = ent.target() else {
                 return;
@@ -341,35 +469,21 @@ impl Drop for X86_64MemoryMap {
                 drop_entry_target(entry)
             }
             unsafe {
-                PageAllocator.deallocate(
-                    NonNull::new_unchecked(table_ptr).cast(),
-                    Layout::new::<RawTable>(),
-                )
+                deallocate_table(table_ptr);
             };
         }
 
-        let mut pml4_table: TableRef<'_> = self.into();
-        for entry in pml4_table.reborrow().entry_refs().into_iter().take(256) {
-            drop_entry_target(entry);
-        }
-        unsafe {
-            PageAllocator.deallocate(
-                NonNull::new_unchecked(pml4_table.raw() as *mut RawTable).cast(),
-                Layout::new::<RawTable>(),
-            )
-        };
-    }
-}
-impl<'a> Into<EntryRef<'a>> for &'a mut X86_64MemoryMap {
-    fn into(self) -> EntryRef<'a> { unsafe { EntryRef::from_raw(&mut self.cr3, Level::CR3) } }
-}
-impl<'a> Into<TableRef<'a>> for &'a mut X86_64MemoryMap {
-    fn into(self) -> TableRef<'a> {
-        let ent: EntryRef<'a> = self.into();
-        let EntryTarget::Table(level, addr) = ent.target() else { unreachable!() };
-        let table_vaddr = PhysicalRemapSpace::p2v(addr);
-        let raw_table = unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
-        unsafe { TableRef::from_raw(level, raw_table) }
+        self.using_table_ref(|mut pml4_table| {
+            for entry in pml4_table
+                .reborrow()
+                .entry_refs()
+                .into_iter()
+                .take(KERNEL_TABLES_CNT)
+            {
+                drop_entry_target(entry);
+            }
+            unsafe { deallocate_table(pml4_table.raw() as *mut RawTable) };
+        })
     }
 }
 
