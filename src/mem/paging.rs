@@ -105,7 +105,7 @@ pub trait MemoryMap: 'static + Sync + Send {
     /// # Panics
     /// - `page_size` should be supported by the `MemoryManager`. We cant do
     ///   large pages yet.
-    unsafe fn map<V: VirtSpace, const N: usize>(
+    unsafe fn map<V: VirtSpace>(
         &self,
         vpage: Page<V>,
         ppage: Page<UMASpace>,
@@ -414,7 +414,7 @@ impl MemoryMap for X86_64MemoryMap {
         }
     }
 
-    unsafe fn map<V: VirtSpace, const N: usize>(
+    unsafe fn map<V: VirtSpace>(
         &self,
         vpage: Page<V>,
         ppage: Page<UMASpace>,
