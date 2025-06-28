@@ -44,5 +44,5 @@ pub extern "C" fn irq_handler(vec: InterruptVector, stack: &InterruptStack) {
 // x86-64 stuff
 global_asm!(include_str!("handler.S"));
 unsafe extern "C" {
-    pub unsafe static ISR_TABLE: [u64; 256];
+    pub static ISR_TABLE: [u64; 256];
 }

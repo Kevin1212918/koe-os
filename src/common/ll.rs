@@ -6,6 +6,12 @@ use core::ptr::NonNull;
 use intrusive_collections::{linked_list, Adapter, PointerOps};
 
 /// A node that can be a part of an intrusive linked list.
+///
+/// # Safety
+/// `LINK_OFFSET` should be the byte offset from start of struct to the `Link`
+/// field.
+///
+/// This `Link` field is used to link structures in an intrusive linked list.
 pub unsafe trait Linked<const LINK_OFFSET: usize> {}
 
 pub type Link = linked_list::Link;

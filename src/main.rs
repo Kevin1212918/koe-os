@@ -10,8 +10,19 @@
     strict_overflow_ops,
     const_alloc_layout
 )]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![warn(clippy::missing_unsafe_doc)]
+#![allow(clippy::needless_range_loop, private_interfaces)]
+#![deny(
+    unsafe_op_in_unsafe_fn,
+    clippy::missing_safety_doc,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::empty_docs
+)]
+#![warn(
+    clippy::doc_link_with_quotes,
+    clippy::doc_markdown,
+    clippy::undocumented_unsafe_blocks
+)]
 
 extern crate alloc;
 
@@ -36,10 +47,14 @@ mod test;
 mod usr;
 
 #[no_mangle]
+#[allow(clippy::missing_panics_doc)]
+/// Kernel entry point.
 pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     serial::init();
     ok!("serial ports initialzed");
 
+    // SAFETY: mbi_ptr is valid for read and not modified until boot_info is
+    // consumed.
     let boot_info = unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) };
     let boot_info = boot_info.expect("boot info not found");
     ok!("boot info found");
@@ -50,6 +65,8 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
 
     // Reload BootInformation using virtual address.
     let mbi_ptr = mbi_ptr as usize + PhysicalRemapSpace::OFFSET;
+    // SAFETY: mbi_ptr is valid for read since it was remapped from physical memory
+    // by mem::init.
     let boot_info = unsafe { BootInformation::load(mbi_ptr as *const BootInformationHeader) };
     let boot_info = boot_info.expect("boot info not found");
 
@@ -77,6 +94,6 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
     let len = boot_mod.module_size() as usize;
     let slice = slice_from_raw_parts_mut(data, len);
 
-    // Not safe!
+    // SAFETY: Not safe!
     Some(unsafe { Box::from_raw(slice) })
 }

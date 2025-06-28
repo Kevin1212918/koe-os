@@ -18,12 +18,14 @@ use crate::common::ll::{self, BoxLinkedListExt as _, LinkedList};
 use crate::mem::addr::PageSize;
 
 pub struct SlabAllocator;
+// SAFETY: caller uphold allocator guarentees.
 unsafe impl Allocator for SlabAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         SLAB_ALLOCATOR_RECORD.allocate(layout)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        // SAFETY: caller uphold allocator guarentees.
         unsafe { SLAB_ALLOCATOR_RECORD.deallocate(ptr, layout) }
     }
 }
@@ -143,7 +145,9 @@ impl UntypedCache {
     /// # Safety
     /// `T` is the underlying type.
     unsafe fn typed<T: Item>(&mut self) -> &mut Cache<T> {
-        // Cache<T> has same lauout as UntypedCache
+        debug_assert!(Layout::new::<Cache<[u8; 3]>>() == Layout::new::<UntypedCache>());
+        // SAFETY: Cache<T> has same layout as UntypedCache, caller guarentees the
+        // transmuted type is correct.
         unsafe { transmute(self) }
     }
 }
@@ -173,8 +177,8 @@ impl<T: Item> Cache<T> {
     }
 
     fn reserve(&mut self) -> Option<NonNull<T>> {
-        // Find a non-full slab. Due to some lifetime issue, cant refactor into
-        // a local function.
+        // Find a non-full slab by first checking partial, then empty, then creating new
+        // slab.
         let mut slab_cursor = self.inner.partial_slabs.front_mut();
 
         if slab_cursor.is_null() {
@@ -201,6 +205,7 @@ impl<T: Item> Cache<T> {
         // SAFETY: Cache exclusively owns the slab. Since there is a mutable
         // reference to cache, there cannot be other references to the slab.
         let slab = unsafe { slab.get().as_mut_unchecked() };
+        // SAFETY: All slabs on a cache has the was created on the cache with the type T
         let slab: &mut Slab<T> = unsafe { slab.typed() };
 
 
@@ -266,19 +271,22 @@ enum SlabFillLevel {
     Full,
 }
 
-// TODO: PORT
-// TODO: Atomic map
+// TODO: Use atomic map to allow concurrent modification.
 
+/// Size of a `Slab` page
 const SLAB_PAGE: PageSize = PageSize::Small;
-
+/// The length of slab map array in terms of the number of u64s. Multiply by 64
+/// for the number of bits in the bitmap.
 const SLAB_MAP_LEN: usize = 8;
+/// Size of the available memory for slots array.
 const SLAB_BUF_SIZE: usize = SLAB_PAGE.usize()
     - size_of::<spin::Mutex<()>>()
     - size_of::<u16>()
     - size_of::<ll::Link>()
     - SLAB_MAP_LEN * size_of::<usize>();
 
-// TODO: figure out a way to set slab alignment.
+// TODO: figure out a way to compile time ensure slab alignment.
+
 /// A page-sized slab with metadata.
 ///
 /// Fits into a [`SLAB_PAGE`] and **must** be `SLAB_PAGE` aligned.
@@ -295,7 +303,8 @@ struct Slab<T: Item> {
 #[repr(C)]
 struct UntypedSlab {
     link: ll::Link,
-    bitmap: [usize; SLAB_MAP_LEN],
+    /// Bitmap for the slot array. 0 is occupied and 1 is free.
+    bitmap: [u64; SLAB_MAP_LEN],
     free_cnt: u16,
     buf: [u8; SLAB_BUF_SIZE],
 }
@@ -308,7 +317,7 @@ impl UntypedSlab {
             buf <- pinned_init::zeroed(),
         })
         .chain(|slab| {
-            slab.bitmap.fill(usize::MAX);
+            slab.bitmap.fill(u64::MAX);
             Ok(())
         })
     }
@@ -320,30 +329,39 @@ impl UntypedSlab {
 }
 
 const SLAB_LINK_OFFSET: usize = offset_of!(UntypedSlab, link);
-
 unsafe impl ll::Linked<SLAB_LINK_OFFSET> for UnsafeCell<UntypedSlab> {}
 
-/// A slab
+/// A slab consisting of a link, a bitmap, some padding, and an array of managed
+/// slots.
 ///
-/// | MAP | PADDING | DATA |
+/// `buf: | padding | slots |`
 impl<T: Item> Slab<T> {
+    /// Number of slots in a `Slab`
     const SLOTS_LEN: usize = {
         let residual_size = SLAB_BUF_SIZE - Self::SLOTS_START;
         residual_size / Self::SLOT_SIZE
     };
+    /// Offset into `Slab.buf` where the slots array start.
     const SLOTS_START: usize = const {
         let buf_start = offset_of!(UntypedSlab, buf);
         let slots_start = buf_start.next_multiple_of(Self::SLOT_ALIGN) - buf_start;
         assert!(slots_start < SLAB_PAGE.usize());
         slots_start
     };
+    /// Align of a slot in bytes.
     const SLOT_ALIGN: usize = { T::LAYOUT.align() };
+    /// Size of a slot in bytes.
     const SLOT_SIZE: usize = { T::LAYOUT.pad_to_align().size() };
+
     const _ASSERT_SLOT_LEN_IS_AT_LEAST_TWO: () = assert!(Self::SLOTS_LEN >= 2);
+    const _ASSERT_SLOT_SIZE_DOES_NOT_OVERFLOW: () = {
+        let buf_start = offset_of!(UntypedSlab, buf);
+        assert!(buf_start + Self::SLOTS_START + Self::SLOT_SIZE <= SLAB_PAGE.usize());
+    };
 
-    fn map(&self) -> &BitSlice<usize, Lsb0> { &self.inner.bitmap.view_bits()[0..Self::SLOTS_LEN] }
+    fn map(&self) -> &BitSlice<u64, Lsb0> { &self.inner.bitmap.view_bits()[0..Self::SLOTS_LEN] }
 
-    fn map_mut(&mut self) -> &mut BitSlice<usize, Lsb0> {
+    fn map_mut(&mut self) -> &mut BitSlice<u64, Lsb0> {
         &mut self.inner.bitmap.view_bits_mut()[0..Self::SLOTS_LEN]
     }
 
@@ -352,7 +370,8 @@ impl<T: Item> Slab<T> {
         // valid.
         let slots_start = unsafe { (&raw const self.inner.buf).byte_add(Self::SLOTS_START) };
         let slots_start = slots_start.cast::<MaybeUninit<T>>();
-        // FIXME: Safety comment here.
+        // SAFETY: We have immutable reference over the slab from the function
+        // parameter. &raw buf + SLOTS_START + SLOT_SIZE does not overflow.
         unsafe { slice::from_raw_parts(slots_start, Self::SLOT_SIZE) }
     }
 
@@ -361,7 +380,8 @@ impl<T: Item> Slab<T> {
         // valid.
         let slots_start = unsafe { (&raw mut self.inner.buf).byte_add(Self::SLOTS_START) };
         let slots_start = slots_start.cast::<MaybeUninit<T>>();
-        // FIXME: Safety comment here.
+        // SAFETY: We have immutable reference over the slab from the function
+        // parameter. &raw buf + SLOTS_START + SLOT_SIZE does not overflow.
         unsafe { slice::from_raw_parts_mut(slots_start, Self::SLOT_SIZE) }
     }
 
@@ -372,7 +392,7 @@ impl<T: Item> Slab<T> {
     fn fill_level(&self) -> SlabFillLevel {
         match self.inner.free_cnt as usize {
             0 => SlabFillLevel::Empty,
-            SLOTS_LEN => SlabFillLevel::Full,
+            slots_len => SlabFillLevel::Full,
             _ => SlabFillLevel::Partial,
         }
     }

@@ -33,6 +33,8 @@ struct X86_64ExecCxt {
 }
 
 const TCB_LINK_OFFSET: usize = offset_of!(Tcb, link);
+// SAFETY: TCB_LINK_OFFSET is the byte offset of the field link: Link from head
+// of Tcb
 unsafe impl Linked<TCB_LINK_OFFSET> for Tcb {}
 struct Tcb {
     link: Link,

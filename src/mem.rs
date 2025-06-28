@@ -70,13 +70,17 @@ pub fn kernel_size() -> usize {
 // ------------ Segmentation stuff -------------
 
 fn init_gdtr() {
+    static mut GDT: Gdt = Gdt([const { SegmentDesc::invalid() }; Gdt::LEN]);
+    // SAFETY: GDT is not accessed outside of this function.
     unsafe { GDT.0[1] = SegmentDesc::code() };
 
     let gdtr = Gdtr {
         limit: (Gdt::LEN * size_of::<SegmentDesc>() - 1) as u16,
-        base: &raw const GDT,
+        // SAFETY: place expr is safe
+        base: unsafe { &raw const GDT },
     };
 
+    // SAFETY: loading a valid gdt is safe.
     unsafe {
         asm!(
             "lgdt [{gdtr}]",
@@ -91,7 +95,6 @@ struct Gdtr {
     base: *const Gdt,
 }
 
-static mut GDT: Gdt = Gdt([const { SegmentDesc::invalid() }; Gdt::LEN]);
 
 #[repr(C, align(8))]
 struct Gdt([SegmentDesc; Self::LEN]);

@@ -38,7 +38,7 @@ pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {
     mb.reserve(AddrRange::from(start..end));
 
     // Mark boot info as reserved.
-    let base = Addr::new(boot_info.start_address() as usize);
+    let base = Addr::new(boot_info.start_address());
     let size = boot_info.total_size();
     mb.reserve(AddrRange::new(base, size));
 
@@ -51,96 +51,6 @@ pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {
 
     mb
 }
-
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub enum MemTyp {
-//     Free,
-//     Reserved,
-// }
-
-///// An extent of memory used in `BootMemoryManager``. Note present `Memblock`
-///// is considered greater than not present `Memblock`
-//#[derive(Debug, Clone, Copy)]
-//pub struct Memblock {
-//    pub range: AddrRange<UMASpace>,
-//    pub typ: MemTyp,
-//}
-//impl Memblock {
-//    /// Returns an iterator of power-of-2 aligned memblocks, whose order is
-//    /// in between `min_order` and `max_order`, inclusive.
-//    pub fn aligned_split(mut self, min_order: u8, max_order: u8) ->
-// AlignedSplit {        'success: {
-//            let min_align = 1 << min_order;
-//
-//            let Some(base) = self.range.start().align_ceil(min_align) else {
-//                break 'success;
-//            };
-//
-//            self.range.base = base;
-//
-//            let Some(end) = self.range.end().align_floor(min_align) else {
-//                break 'success;
-//            };
-//
-//            self.range.size = match (end - base).try_into() {
-//                Ok(x) => x,
-//                Err(_) => break 'success,
-//            };
-//
-//            return AlignedSplit {
-//                memblock: self,
-//                offset: 0,
-//                max_order: max_order as u32,
-//            };
-//        }
-//
-//        // Returning an empty iterator.
-//        AlignedSplit {
-//            memblock: self,
-//            offset: self.range.size,
-//            max_order: max_order as u32,
-//        }
-//    }
-//
-//    pub fn order(&self) -> u8 { self.range.start().usize().trailing_zeros() as
-// u8 }
-//}
-//impl PartialEq for Memblock {
-//    fn eq(&self, other: &Self) -> bool { self.range.start() ==
-// other.range.start() }
-//}
-//impl Eq for Memblock {}
-//impl PartialOrd for Memblock {
-//    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-//        self.range.start().partial_cmp(&other.range.start())
-//    }
-//}
-//impl Ord for Memblock {
-//    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-//        self.range.start().cmp(&other.range.start())
-//    }
-//}
-//
-//impl From<&MemoryArea> for Memblock {
-//    fn from(value: &MemoryArea) -> Self {
-//        let ma_typ: MemoryAreaType = value.typ().into();
-//        let typ = match ma_typ {
-//            MemoryAreaType::Available => MemTyp::Free,
-//            MemoryAreaType::Reserved
-//            | MemoryAreaType::AcpiAvailable
-//            | MemoryAreaType::ReservedHibernate
-//            | MemoryAreaType::Defective
-//            | MemoryAreaType::Custom(_) => MemTyp::Reserved,
-//        };
-//        Memblock {
-//            range: AddrRange {
-//                base: Addr::new(value.start_address() as usize),
-//                size: value.size() as usize,
-//            },
-//            typ,
-//        }
-//    }
-//}
 
 const MEMBLOCKS_LEN: usize = 128;
 

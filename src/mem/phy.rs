@@ -5,7 +5,6 @@ use core::fmt::Write as _;
 use core::ops::Range;
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::usize;
 
 use buddy::{BuddySystem, BUDDY_MAX_ORDER};
 use memblock::MemblockSystem;
@@ -84,7 +83,7 @@ impl PhysicalMemoryRecord {
     /// its backing memory is leaked.
     ///
     /// # Safety
-    /// PhysicalRemapSpace should be mapped.
+    /// `PhysicalRemapSpace` should be mapped.
     unsafe fn new(bmm: BootMemoryManager) -> Self {
         // SAFETY: Caller ensures PhysicalRemapSpace is mapped
         let managed_range = bmm.0.borrow().managed_range();
@@ -181,7 +180,7 @@ impl PhysicalMemoryRecord {
 pub struct PhysicalMemoryManager;
 impl PhysicalMemoryManager {
     pub fn allocate_pages(&self, cnt: usize, page_size: PageSize) -> Option<PageRange<UMASpace>> {
-        // FIXME : Not safe!
+        // SAFETY: FIXME: Not safe!
         unsafe { PMM.get_unchecked() }
             .lock()
             .allocate_pages(cnt, page_size)

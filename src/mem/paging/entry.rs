@@ -22,8 +22,8 @@ pub struct EntryRef<'a> {
     level: Level,
     raw: &'a mut RawEntry,
 }
-impl<'a> Into<&'a mut RawEntry> for EntryRef<'a> {
-    fn into(self) -> &'a mut RawEntry { self.raw }
+impl<'a> From<EntryRef<'a>> for &'a mut RawEntry {
+    fn from(val: EntryRef<'a>) -> Self { val.raw }
 }
 
 impl<'a> EntryRef<'a> {
@@ -96,17 +96,14 @@ impl<'a> EntryRef<'a> {
     }
 
     /// Get the flags from this entry. The flags may contain unspecified bits.
-    pub fn flags(&self) -> Flags {
-        let ret = Flags(self.raw.0 as u16);
-        ret
-    }
+    pub fn flags(&self) -> Flags { Flags(self.raw.0 as u16) }
 
     /// Toggle the flags.
     ///
     /// # Undefined Behavior
     /// The `flags` should not contain any unspecified bits.
     pub fn toggle_flags(&mut self, mut flags: Flags) {
-        flags.reloc_PAT(self.level);
+        flags.reloc_pat(self.level);
         flags.truncate();
         self.toggle_flags_unchecked(flags)
     }
@@ -121,7 +118,7 @@ impl<'a> EntryRef<'a> {
     /// # Undefined Behavior
     /// The `flags` should not contain any unspecified bits.
     pub fn set_flags(&mut self, mut flags: Flags, value: bool) {
-        flags.reloc_PAT(self.level);
+        flags.reloc_pat(self.level);
         flags.truncate();
         self.set_flags_unchecked(flags, value)
     }
@@ -224,7 +221,7 @@ impl Flags: u16 {
 
 impl Flags {
     /// Relocate the PAT flag to the correct location depending on entry level.
-    const fn reloc_PAT(mut self, level: Level) -> Flags {
+    const fn reloc_pat(mut self, level: Level) -> Flags {
         if matches!(level, Level::PT) {
             let is_pat = self.contains(Self::PAT);
             if is_pat {

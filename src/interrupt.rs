@@ -52,12 +52,14 @@ pub fn init() {
 }
 
 fn enable_interrupt() {
+    // SAFETY: enabling interrupt is safe.
     unsafe {
         asm!("sti");
     };
 }
 
 fn disable_interrupt() {
+    // SAFETY: disabling interrupt is safe.
     unsafe {
         asm!("cli");
     };
@@ -68,7 +70,7 @@ fn init_idtr() {
         limit: (Idt::LEN * size_of::<InterruptDesc>()) as u16,
         base: IDT.get(),
     };
-
+    // SAFETY: loading valid interrupt descriptor table is safe.
     unsafe {
         asm!(
             "lidt [{idtr}]",
@@ -81,6 +83,7 @@ fn init_exn_handlers() {
     let mut idt = IDT_HANDLE.lock();
 
     for i in 0..=21 {
+        // SAFETY: Accessing interrupt service routine table.
         let addr = unsafe { ISR_TABLE[i] };
         if addr == 0 {
             continue;
@@ -93,6 +96,7 @@ fn init_irq_handlers() {
     let mut idt = IDT_HANDLE.lock();
 
     for i in 32..=47 {
+        // SAFETY: Accessing interrupt service routine table.
         let addr = unsafe { ISR_TABLE[i] };
         if addr == 0 {
             continue;

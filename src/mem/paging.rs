@@ -259,7 +259,9 @@ fn x86_64_init(bmm: &BootMemoryManager) -> X86_64MemoryManager {
         cr3: spin::Mutex::new(cr3_raw),
     });
 
-    set_cr3(cr3_raw);
+    // SAFETY: hand rolled cr3 is safe.
+    unsafe { set_cr3(cr3_raw) };
+    // SAFETY: DEFAULT_KERNEL_MAP is initialized before.
     let memory_manager = X86_64MemoryManager(MapRef::from(unsafe {
         DEFAULT_KERNEL_MAP.get_unchecked()
     }));
@@ -273,7 +275,8 @@ impl MemoryManager for X86_64MemoryManager {
 
     fn swap(&mut self, new: MapRef<X86_64MemoryMap>) {
         self.0 = new;
-        set_cr3(self.0.cr3.lock().clone());
+        // SAFETY: MemoryMap is always in valid state.
+        unsafe { set_cr3(*self.0.cr3.lock()) };
         self.flush();
     }
 
@@ -282,14 +285,24 @@ impl MemoryManager for X86_64MemoryManager {
     fn flush(&mut self) { flush_tlb(); }
 }
 
-fn set_cr3(entry: RawEntry) { unsafe { asm!("mov cr3, {}", in(reg) entry.0) }; }
+/// # Safety
+///
+/// Caller need to guarentee entry is a valid cr3 entry that points to a valid
+/// paging structure.
+unsafe fn set_cr3(entry: RawEntry) {
+    // SAFETY: see function safety.
+    unsafe { asm!("mov cr3, {}", in(reg) entry.0) };
+}
 fn cr3() -> RawEntry {
     let out: usize;
+    // SAFETY: reading from control register is safe.
     unsafe { asm!("mov {}, cr3", out(reg) out) };
     RawEntry(out)
 }
 fn flush_tlb() {
     // TODO: use invlpg instead
+
+    // SAFETY: reading then write to cr3 from current core is safe.
     unsafe {
         asm!(
             "mov {tmp}, cr3",
@@ -318,6 +331,7 @@ impl X86_64MemoryMap {
         F: FnOnce(EntryRef<'_>) -> T,
     {
         let mut cr3 = self.cr3.lock();
+        // SAFETY: cr3 holds a top-level cr3 entry.
         let entry_ref = unsafe { EntryRef::from_raw(&mut cr3, Level::CR3) };
         cont(entry_ref)
     }
@@ -333,7 +347,10 @@ impl X86_64MemoryMap {
                 unreachable!()
             };
             let table_vaddr = PhysicalRemapSpace::p2v(addr);
+            // SAFETY: cr3 contains valid pointer to the top-level table. We maintain
+            // ownership over that table.
             let raw_table = unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
+            // SAFETY: entry_ref provides the correct table level.
             let table_ref = unsafe { TableRef::from_raw(level, raw_table) };
             cont(table_ref)
         })
@@ -367,6 +384,7 @@ impl MemoryMap for X86_64MemoryMap {
     fn new() -> Self {
         let (table_vaddr, table_paddr) = allocate_table();
 
+        // SAFETY: this table will be the top-level table after initialization.
         let pml4_table_ref = unsafe {
             TableRef::from_raw(
                 Level::PML4,
@@ -380,20 +398,20 @@ impl MemoryMap for X86_64MemoryMap {
         cur_map.using_table_ref(move |table_ref: TableRef| {
             pml4_table_ref.raw().0[KERNEL_TABLES_CNT..]
                 .copy_from_slice(&table_ref.raw().0[KERNEL_TABLES_CNT..]);
-
-            let mut cr3 = RawEntry::default();
-            unsafe {
-                EntryRef::init(
-                    &mut cr3,
-                    Level::CR3,
-                    table_paddr,
-                    Flags::empty(),
-                )
-            };
-            X86_64MemoryMap {
-                cr3: spin::Mutex::new(cr3),
-            }
-        })
+        });
+        let mut cr3 = RawEntry::default();
+        // SAFETY: We hold cr3.
+        unsafe {
+            EntryRef::init(
+                &mut cr3,
+                Level::CR3,
+                table_paddr,
+                Flags::empty(),
+            )
+        };
+        X86_64MemoryMap {
+            cr3: spin::Mutex::new(cr3),
+        }
     }
 
     unsafe fn map<V: VirtSpace, const N: usize>(
@@ -410,6 +428,7 @@ impl MemoryMap for X86_64MemoryMap {
         }
 
         self.using_entry_ref(|cr3| {
+            // SAFETY: allocate_table uses physical remap space.
             let mut walker = unsafe { LinearWalker::new(cr3, vpage.start()) };
 
             let mut cur_level = walker.cur().level();
@@ -435,6 +454,7 @@ impl MemoryMap for X86_64MemoryMap {
         }
 
         let ret = self.using_entry_ref(|cr3| {
+            // SAFETY: allocate_table uses physical remap space.
             let mut walker = unsafe { LinearWalker::new(cr3, vaddr) };
 
             while walker.try_down().is_some() {}
@@ -457,7 +477,10 @@ impl Drop for X86_64MemoryMap {
                 return;
             };
             let table_ptr = PhysicalRemapSpace::p2v(addr).into_ptr::<RawTable>();
+            // SAFETY: entry_ref provides a valid physical addr to table, which is mapped in
+            // PhysicalRemapSpace.
             let raw_table = unsafe { table_ptr.as_mut_unchecked() };
+            // SAFETY: entry_ref provides the correct table level.
             let table = unsafe { TableRef::from_raw(level, raw_table) };
             for entry in table.entry_refs() {
                 drop_entry_target(entry)
@@ -526,10 +549,7 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
             EntryTarget::None | EntryTarget::Page(..) => {
                 let table_paddr = alloc.allocate(PageSize::Small.layout()).unwrap().base;
                 let table_level = self.cur_entry.level().next_level().unwrap();
-                self.cur_entry.reinit(
-                    table_paddr.into(),
-                    DEFAULT_PAGE_TABLE_FLAGS,
-                );
+                self.cur_entry.reinit(table_paddr, DEFAULT_PAGE_TABLE_FLAGS);
                 unsafe { self.down_with_table(table_paddr, table_level) }
             },
             EntryTarget::Table(level, addr) => unsafe { self.down_with_table(addr, level) },

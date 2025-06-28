@@ -1,6 +1,5 @@
 use alloc::alloc::{AllocError, Allocator};
 use core::alloc::Layout;
-use core::fmt::Write as _;
 use core::ops::Div as _;
 use core::ptr::NonNull;
 

@@ -42,7 +42,7 @@ impl BuddySystem {
     /// # Safety
     /// `pfn` should have been reserved from this `BuddySystem`
     pub unsafe fn free(&mut self, idx: usize, order: u8) {
-        let depth = Self::order_to_depth(&self, order);
+        let depth = Self::order_to_depth(self, order);
         let idx = idx >> order;
 
         let mut cursor = self.map.cursor_mut(depth, idx);
@@ -98,9 +98,7 @@ impl BuddySystem {
         }
 
         // No root contains a block with target order.
-        if cursor_opt.is_none() {
-            return None;
-        }
+        cursor_opt.as_ref()?;
 
 
         while let Some(ref mut cursor) = cursor_opt {

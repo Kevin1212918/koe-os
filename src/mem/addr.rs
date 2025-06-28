@@ -185,6 +185,13 @@ impl<S: AddrSpace> From<Range<Addr<S>>> for AddrRange<S> {
         Self { base, size }
     }
 }
+impl<S: AddrSpace> From<PageRange<S>> for AddrRange<S> {
+    fn from(val: PageRange<S>) -> Self {
+        let size = val.len * val.base.page_size().usize();
+        let base = val.base.addr();
+        AddrRange { base, size }
+    }
+}
 impl<S: AddrSpace> AddrRange<S> {
     /// Creates a new address range from base address and range size.
     ///
@@ -238,7 +245,7 @@ impl<S: AddrSpace> AddrRange<S> {
     /// are returned. The returned ranges may be empty with an unspecified base.
     pub fn range_sum(&self, rhs: &Self) -> [Self; 2] {
         if !self.overlaps(rhs) {
-            return [self.clone(), rhs.clone()];
+            return [*self, *rhs];
         }
         let start = self.start().min(rhs.start());
         let end = self.end().max(rhs.end());
@@ -266,7 +273,7 @@ impl<S: AddrSpace> AddrRange<S> {
             return [Self::empty(), rhs];
         }
         if rhs.is_empty() {
-            return [self.clone(), Self::empty()];
+            return [*self, Self::empty()];
         }
 
         let low_size: usize = (rhs.base - self.base)
@@ -341,11 +348,11 @@ impl<S: AddrSpace> AddrRange<S> {
             Err(_) => return empty,
         };
 
-        return SplitAligned {
+        SplitAligned {
             range: self,
             offset: 0,
             max_order: max_order as u32,
-        };
+        }
     }
 }
 
@@ -434,13 +441,6 @@ pub struct PageRange<S: AddrSpace> {
     pub base: Page<S>,
     /// Number of pages in the page range.
     pub len: usize,
-}
-impl<S: AddrSpace> Into<AddrRange<S>> for PageRange<S> {
-    fn into(self) -> AddrRange<S> {
-        let size = self.len * self.base.page_size().usize();
-        let base = self.base.addr();
-        AddrRange { base, size }
-    }
 }
 impl<S: AddrSpace> IntoIterator for PageRange<S> {
     type Item = Page<S>;
@@ -580,6 +580,6 @@ impl PageSize {
         None
     }
 }
-impl Into<usize> for PageSize {
-    fn into(self) -> usize { self.usize() }
+impl From<PageSize> for usize {
+    fn from(val: PageSize) -> Self { val.usize() }
 }

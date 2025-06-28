@@ -12,6 +12,7 @@ pub const TiB: usize = 1 << 40;
 #[inline(always)]
 pub fn hlt() -> ! {
     loop {
+        // SAFETY: hlt is safe
         unsafe { asm!("hlt") };
     }
 }

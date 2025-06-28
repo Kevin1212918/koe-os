@@ -36,7 +36,11 @@ impl<'a> TableRef<'a> {
     }
     pub fn index(self, idx: usize) -> EntryRef<'a> {
         debug_assert!(idx < self.data.0.len());
+        // SAFETY: dbug_assert does bound check. We allow ub on release for array
+        // indexing.
         let raw_entry = unsafe { self.data.0.get_unchecked_mut(idx) };
+        // SAFETY: If this table is in the paging structure, then the entry level should
+        // be the table's level.
         unsafe { EntryRef::from_raw(raw_entry, self.level) }
     }
     pub fn entry_refs(self) -> impl IntoIterator<Item = EntryRef<'a>> {
@@ -44,6 +48,8 @@ impl<'a> TableRef<'a> {
         self.data
             .0
             .iter_mut()
+            // SAFETY: If this table is in the paging structure, then the entry level should
+            // be the table's level.
             .map(move |x| unsafe { EntryRef::from_raw(x, level) })
     }
 
@@ -53,10 +59,10 @@ impl<'a> TableRef<'a> {
     {
         TableRef {
             level: self.level,
-            data: &mut self.data,
+            data: self.data,
         }
     }
 }
-impl<'a> Into<&'a mut RawTable> for TableRef<'a> {
-    fn into(self) -> &'a mut RawTable { self.data }
+impl<'a> From<TableRef<'a>> for &'a mut RawTable {
+    fn from(val: TableRef<'a>) -> Self { val.data }
 }
