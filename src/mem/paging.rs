@@ -29,10 +29,13 @@ pub use entry::Flags;
 pub fn init(bmm: &BootMemoryManager) -> impl MemoryManager { x86_64_init(bmm) }
 
 /// Smart shared reference to a memory map.
-#[derive(Clone, From)]
+#[derive(From)]
 pub enum MapRef<M: MemoryMap> {
     Static(&'static M),
     Arc(Arc<M>),
+}
+impl<M: MemoryMap> MapRef<M> {
+    pub fn new() -> MapRef<M> { Self::Arc(Arc::new(MemoryMap::new())) }
 }
 impl<M: MemoryMap> Deref for MapRef<M> {
     type Target = M;
@@ -41,6 +44,14 @@ impl<M: MemoryMap> Deref for MapRef<M> {
         match self {
             MapRef::Static(r) => r,
             MapRef::Arc(r) => r,
+        }
+    }
+}
+impl<M: MemoryMap> Clone for MapRef<M> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Static(arg0) => Self::Static(arg0),
+            Self::Arc(arg0) => Self::Arc(arg0.clone()),
         }
     }
 }

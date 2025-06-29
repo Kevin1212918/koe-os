@@ -1,12 +1,15 @@
+use core::alloc::Layout;
 use core::arch::asm;
 use core::ops::Range;
+use core::ptr;
 
-use addr::Addr;
+use addr::{Addr, Allocator, Page, PageRange, PageSize};
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use virt::KernelImageSpace;
+use paging::{Flags, MapRef, MemoryManager, MemoryMap, MMU};
+use virt::{KernelImageSpace, UserSpace};
 
 
 pub mod addr;
@@ -21,6 +24,7 @@ pub use paging::X86_64MemoryMap;
 pub use phy::UMASpace;
 pub use virt::PhysicalRemapSpace;
 
+use crate::common::log::{self, ok};
 use crate::common::Privilege;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;

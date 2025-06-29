@@ -485,6 +485,14 @@ impl<S: AddrSpace> PageRange<S> {
 
         Some(Self { base, len })
     }
+
+    pub const fn index(&self, idx: usize) -> Page<S> {
+        debug_assert!(idx < self.len);
+        Page {
+            base: self.base.base.byte_add(idx * self.base.page_size().usize()),
+            page_size: self.base.page_size,
+        }
+    }
 }
 
 /// An allocator which manages an address space. This trait is based on

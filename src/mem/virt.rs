@@ -70,3 +70,12 @@ impl VirtSpace for RecursivePagingSpace {
 impl AddrSpace for RecursivePagingSpace {
     const RANGE: Range<usize> = 0xFFFF_FE80_0000_0000..0xFFFF_FF00_0000_0000;
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UserSpace;
+impl VirtSpace for UserSpace {
+    const IS_KERNEL: bool = false;
+}
+impl AddrSpace for UserSpace {
+    const RANGE: Range<usize> = 0x0000_0000_0000_0000..0x0000_8000_0000_0000;
+}
