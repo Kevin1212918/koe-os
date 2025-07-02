@@ -37,7 +37,7 @@ _do_exception_handler:
   push r9
   push r10
   push r11
-  sub rsp, 0x8
+  sub rsp, 0x8 
 
   mov rdi, [rsp+0x50]
   lea rsi, [rsp+0x58]

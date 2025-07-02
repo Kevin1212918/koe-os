@@ -14,6 +14,7 @@ use crate::common::Privilege;
 
 mod handler;
 mod pic;
+mod timer;
 
 /// An RAII implementation of reentrant interrupt lock. This structure
 /// guarentees that interrupt is disabled.
@@ -34,6 +35,8 @@ impl Drop for InterruptGuard {
         }
     }
 }
+
+/// Per-CPU tracker for the number of interrupt guard in the kernel.
 static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
 
 pub type IrqHandler = fn();
@@ -83,7 +86,7 @@ fn init_exn_handlers() {
     let mut idt = IDT_HANDLE.lock();
 
     for i in 0..=21 {
-        // SAFETY: Accessing interrupt service routine table.
+        // SAFETY: Taking access to interrupt service routine table.
         let addr = unsafe { ISR_TABLE[i] };
         if addr == 0 {
             continue;
@@ -96,7 +99,7 @@ fn init_irq_handlers() {
     let mut idt = IDT_HANDLE.lock();
 
     for i in 32..=47 {
-        // SAFETY: Accessing interrupt service routine table.
+        // SAFETY: Taking address of interrupt service routine table.
         let addr = unsafe { ISR_TABLE[i] };
         if addr == 0 {
             continue;

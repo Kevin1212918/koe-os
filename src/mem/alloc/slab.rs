@@ -14,9 +14,11 @@ use pinned_init::{init, init_from_closure, pin_data, Init};
 
 use super::page::PageAllocator;
 use super::{allocate_if_zst, deallocate_if_zst};
-use crate::common::ll::{self, BoxLinkedListExt as _, LinkedList};
+use crate::common::ll::boxed::BoxLinkedListExt as _;
+use crate::common::ll::{self, LinkedList};
 use crate::mem::addr::PageSize;
 
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SlabAllocator;
 // SAFETY: caller uphold allocator guarentees.
 unsafe impl Allocator for SlabAllocator {

@@ -14,7 +14,7 @@ use crate::mem::UMASpace;
 /// A page allocator that will only allocate to the nearest page bound.
 ///
 /// For now, this will only allocate [`PageSize::MIN`] page.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PageAllocator;
 unsafe impl addr::Allocator<UMASpace> for PageAllocator {
     fn allocate(&self, layout: Layout) -> Option<AddrRange<UMASpace>> {

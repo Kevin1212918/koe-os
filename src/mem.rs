@@ -9,20 +9,20 @@ use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
 use paging::{Flags, MapRef, MemoryManager, MemoryMap, MMU};
-use virt::{KernelImageSpace, UserSpace};
+use virt::KernelImageSpace;
 
 
 pub mod addr;
 mod alloc;
-mod paging;
+pub mod paging;
 mod phy;
 mod virt;
 
-pub use alloc::PageAllocator;
+pub use alloc::{GlobalAllocator, PageAllocator, StaticAllocator};
 
 pub use paging::X86_64MemoryMap;
 pub use phy::UMASpace;
-pub use virt::PhysicalRemapSpace;
+pub use virt::{PhysicalRemapSpace, UserSpace};
 
 use crate::common::log::{self, ok};
 use crate::common::Privilege;

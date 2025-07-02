@@ -43,6 +43,7 @@ mod fs;
 mod interrupt;
 mod io;
 mod mem;
+mod sched;
 mod test;
 mod usr;
 

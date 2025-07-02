@@ -1,6 +1,4 @@
-//!
-//!
-//! # Virtual Memory Layout
+//! # Kernel Virtual Memory Layout
 //! | Address                             | Description               | Size  |
 //! |:------------------------------------|--------------------------:|:-----:|
 //! |0xFFFF888000000000:0xFFFFC88000000000|Physical Memory Remap      | 64 TB |

@@ -12,6 +12,7 @@ pub use slab::SlabAllocator;
 /// An allocator which fails all allocations and no-op on deallocation.
 ///
 /// This is useful for constructing a `Box` over static memory.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct StaticAllocator;
 unsafe impl Allocator for StaticAllocator {
     fn allocate(&self, _: Layout) -> Result<NonNull<[u8]>, AllocError> { Err(AllocError) }
@@ -24,7 +25,7 @@ unsafe impl Allocator for StaticAllocator {
 }
 
 /// The global allocator.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GlobalAllocator;
 unsafe impl Allocator for GlobalAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {

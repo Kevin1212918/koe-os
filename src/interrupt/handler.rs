@@ -36,6 +36,7 @@ pub extern "C" fn exception_handler(vec: InterruptVector, stack: &InterruptStack
 pub extern "C" fn irq_handler(vec: InterruptVector, stack: &InterruptStack) {
     let irq = vec - VECTOR_PIC;
     match irq {
+        0 => timer_handler(),
         1 => ps2::ps2_keyboard_handler(),
         _ => (),
     }

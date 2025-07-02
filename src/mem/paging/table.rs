@@ -23,8 +23,14 @@ pub struct TableRef<'a> {
 }
 
 impl<'a> TableRef<'a> {
+    /// Return the underlying reference to raw table.
     pub fn raw(self) -> &'a mut RawTable { self.data }
 
+    /// Constructs a `TableRef` from `Level` and `RawTable`.
+    ///
+    /// # Safety
+    /// Caller should ensure the table is or will be at the correct level in the
+    /// paging structure as specified by `level`.
     pub unsafe fn from_raw(level: Level, data: &'a mut RawTable) -> Self { Self { level, data } }
 
     /// For a `Table` of the given `typ`, get the `PageEntry` indexed by

@@ -99,11 +99,7 @@ impl<'a> EntryRef<'a> {
     pub fn flags(&self) -> Flags { Flags(self.raw.0 as u16) }
 
     /// Toggle the flags.
-    ///
-    /// # Undefined Behavior
-    /// The `flags` should not contain any unspecified bits.
     pub fn toggle_flags(&mut self, mut flags: Flags) {
-        flags.reloc_pat(self.level);
         flags.truncate();
         self.toggle_flags_unchecked(flags)
     }
@@ -114,11 +110,7 @@ impl<'a> EntryRef<'a> {
     }
 
     /// Set the flags to value.
-    ///
-    /// # Undefined Behavior
-    /// The `flags` should not contain any unspecified bits.
     pub fn set_flags(&mut self, mut flags: Flags, value: bool) {
-        flags.reloc_pat(self.level);
         flags.truncate();
         self.set_flags_unchecked(flags, value)
     }
@@ -135,7 +127,8 @@ impl<'a> EntryRef<'a> {
     /// Constructs a `EntryRef` from `Level` and `RawEntry`.
     ///
     /// This function is mainly useful for reconstructing `EntryRef` from
-    /// already specified `RawEntry`.
+    /// already specified `RawEntry`. It is always safe to do so through this
+    /// function.
     ///
     /// Note that while `raw` may or may not be specified, using `EntryRef` in
     /// any useful capacity forms requires the entry be specified through
@@ -153,13 +146,9 @@ impl<'a> EntryRef<'a> {
     /// Specifies a `RawEntry` with given flags at `raw`, and return an
     /// `EntryRef` pointed to it. Returns `None` if the flags are not valid.
     ///
-    /// # Undefined Behavior
-    /// The `flags` should not contain any unspecified bits.
-    ///
     /// # Safety
-    /// If the underlying raw entry is in the paging structure, caller should
-    /// ensure `level` is the correct `Level` of the containing table (or
-    /// cr3).
+    /// Caller should ensure `level` is the correct `Level` of the containing
+    /// table (or cr3).
     pub unsafe fn init(
         raw: &'a mut RawEntry,
         level: Level,
@@ -172,10 +161,7 @@ impl<'a> EntryRef<'a> {
         new
     }
 
-    /// respecifies the underlying `RawEntry` with `addr` and `flags`.
-    ///
-    /// # Undefined Behavior
-    /// The `flags` should not contain any unspecified bits.
+    /// Respecifies the underlying `RawEntry` with `addr` and `flags`.
     pub fn reinit(&mut self, addr: Addr<UMASpace>, flags: Flags) {
         self.raw.0 = 0;
         self.set_flags(flags, true);
@@ -210,27 +196,6 @@ impl Flags: u16 {
     // Page flags
     const DIRTY = 0b100_0000;
     const GLOBAL = 0b1_0000_0000;
-
-    /// Page Attribute Table Flag.
-    const PAT = 0b1_0000_0000_0000;
-
-    /// Low Page Attribute Table Flag. This should only be used in the local module. Use Flags::PAT for
-    /// setting Page Attribute Flag.
-    const _LPAT = 0b1000_0000;
 }}
 
-impl Flags {
-    /// Relocate the PAT flag to the correct location depending on entry level.
-    const fn reloc_pat(mut self, level: Level) -> Flags {
-        if matches!(level, Level::PT) {
-            let is_pat = self.contains(Self::PAT);
-            if is_pat {
-                self.0 |= Self::_LPAT.0;
-            } else {
-                self.0 &= Self::_LPAT.complement().0;
-            }
-            self.0 &= Self::PAT.complement().0;
-        }
-        self
-    }
-}
+impl Flags {}
