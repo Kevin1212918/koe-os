@@ -5,9 +5,9 @@ switch_to:
   push r13 
   push r14 
   push r15 
-  // rsp is saved by sched
-  mov [rdi], rsp
-  mov rsp, rsi 
+
+  mov [rdi], rsp        // store the old rsp to the first argument.
+  mov rsp, rsi          // switch stack to the second argument.
 
   pop r15 
   pop r14 

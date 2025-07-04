@@ -25,6 +25,18 @@ impl InterruptGuard {
         INTERRUPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
         Self()
     }
+    pub fn raw_lock() {
+        disable_interrupt();
+        INTERRUPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
+    }
+    /// # Safety
+    /// `raw_unlock` should always correspond to a previously called `raw_lock`.
+    pub unsafe fn raw_unlock() {
+        let prev_cnt = INTERRUPT_GUARD_CNT.fetch_sub(1, atomic::Ordering::Relaxed);
+        if prev_cnt == 1 {
+            enable_interrupt();
+        }
+    }
 }
 
 impl Drop for InterruptGuard {

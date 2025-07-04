@@ -6,110 +6,109 @@ use core::hint::unreachable_unchecked;
 use core::marker::PhantomPinned;
 use core::mem::{offset_of, MaybeUninit};
 
+use switch::switch_to;
+use thread::{Thread, THREAD_LINK_OFFSET};
+
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{Link, Linked, LinkedList};
 use crate::interrupt::InterruptGuard;
 use crate::mem::addr::PageSize;
 use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
 
-static SCHED: spin::Mutex<spin::Lazy<Scheduler>> =
-    spin::Mutex::new(spin::Lazy::new(|| Scheduler::new()));
+mod switch;
+pub mod thread;
 
-// switch_to:
-// push callee-saved
-// record rsp
-// switch rsp
-// pop callee-saved
-// ret
-
-const THREAD_LINK_OFFSET: usize = offset_of!(Thread, link);
-const THREAD_PAGE_CNT: usize = 2;
-const THREAD_SIZE: usize = THREAD_PAGE_CNT * PageSize::MIN.usize();
-const KERNEL_STACK_SIZE: usize =
-    THREAD_SIZE - size_of::<Link>() - size_of::<u64>() - size_of::<PhantomPinned>();
-const _: () = assert!(size_of::<Thread>() == THREAD_SIZE);
-
-unsafe impl Linked<THREAD_LINK_OFFSET> for Thread {}
-#[repr(C, align(8192))]
-struct Thread {
-    link: Link,
-    rsp: u64,
-    _pin: PhantomPinned,
-
-    stack: [MaybeUninit<u8>; KERNEL_STACK_SIZE],
-}
+static SCHED: spin::Lazy<Scheduler> = spin::Lazy::new(|| Scheduler::new());
 
 /// Per-CPU structure managing currently running threads.
 struct SchedulerRecord {
     running_thread: Option<Box<Thread>>,
     ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<Thread>>,
     zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<Thread>>,
-    idle: Option<Box<Thread>>,
 }
 struct Scheduler(spin::Mutex<SchedulerRecord>);
 impl Scheduler {
-    fn new(idle: Box<Thread>) -> Self {
+    fn new() -> Self {
         Scheduler(spin::Mutex::new(SchedulerRecord {
             running_thread: None,
             ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<Thread>>::new_in(Global),
             zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<Thread>>::new_in(Global),
-            idle: Some(idle),
         }))
     }
 
+    /// Creates and schedule a new kernel thread which will call `main`.
+    pub fn new_thread(main: fn()) {}
+    /// Schedules a new thread.
+    ///
+    /// # Safety
+    /// Stack of the new thread should be safe to be switched to.
+    unsafe fn schedule(new: Box<Thread>) {}
+
     /// Yield to another thread if available.
-    pub fn yield_thread(&self) { self.reschedule(ThreadState::Ready); }
+    pub fn yield_thread(&self) { Self::reschedule(ThreadState::Ready); }
 
-    fn reschedule(&self, new_state: ThreadState) {
-        if matches!(new_state, ThreadState::Running) {
-            // We are already running.
+    fn reschedule(new_state: ThreadState) {
+        let cur_new_opt = Self::before_switch(new_state);
+        let Some((cur, new)) = cur_new_opt else {
             return;
-        }
-
-        let intrpt_guard = InterruptGuard::new();
-        let sched_guard = spin::MutexGuard::leak(self.0.lock());
-        let new_thread_rsp = {
-            // SAFETY: The access does not overlap with other access since we are holding
-            // scheduler lock.
-            let new_thread_opt = sched_guard
-                .ready_threads
-                .front()
-                .get()
-                .or_else(|| sched_guard.idle.as_deref());
-
-            let Some(new_thread) = new_thread_opt else {
-                // Idle is empty, so the current thread is idle.
-                return;
-            };
-            new_thread.rsp
         };
+        // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
+        // scheduler are locked by before_switch.
+        unsafe { switch_to(cur, new) };
+        // SAFETY: called incorrespondance to before_switch.
+        unsafe { Self::after_switch() };
+    }
 
-        let mut cur_thread = sched_guard.running_thread.take().unwrap();
+    /// Prepares thread switch.
+    ///
+    /// Disable interrupt and lock the scheduler.
+    ///
+    /// Move current thread from `running_thread` to the thread queue as
+    /// specified by `ThreadState`, then try find a new thread from
+    /// `ready_threads` into the `running_thread` to be executed.
+    ///
+    /// Returns `None` if no new thread is available to execute. Otherwise
+    /// return a pointer to current thread's `rsp` field, and the new
+    /// thread's `rsp`.
+    fn before_switch(new_state: ThreadState) -> Option<(*mut u64, u64)> {
+        // Disable interrupt on current core.
+        InterruptGuard::raw_lock();
+        // Lock scheduler for the current core.
+        let sched = spin::MutexGuard::leak(SCHED.0.lock());
+
+        // SAFETY: The access does not overlap with other access since we are holding
+        // scheduler lock.
+        let new_thread = sched.ready_threads.front_mut().remove()?;
+        let new_thread_rsp = new_thread.meta.rsp;
+        let mut cur_thread = sched
+            .running_thread
+            .replace(new_thread)
+            .expect("There should always be a running thread");
+
         let que = match new_state {
-            ThreadState::Ready => &mut sched_guard.ready_threads,
-            ThreadState::Zombie => &mut sched_guard.zombie_threads,
+            ThreadState::Ready => &mut sched.ready_threads,
+            ThreadState::Zombie => &mut sched.zombie_threads,
             // SAFETY: we check at start of the function that new_state is not running.
             ThreadState::Running => unsafe { unreachable_unchecked() },
         };
-        let cur_thread_rsp = &raw mut cur_thread.rsp;
-        let cur_thread_ptr = &raw const *cur_thread;
+
+        let cur_thread_rsp = &raw mut cur_thread.meta.rsp;
         que.push_back(cur_thread);
+        Some((cur_thread_rsp, new_thread_rsp))
+    }
 
-        drop(que);
-        drop(new_state);
-
-        unsafe { switch_to(cur_thread_rsp, new_thread_rsp) };
-
-        let mut cur_thread = unsafe {
-            sched_guard
-                .ready_threads
-                .cursor_mut_from_ptr(cur_thread_ptr)
-        };
-        let cur_thread = unsafe { cur_thread.remove().unwrap_unchecked() };
-        debug_assert!(sched_guard.running_thread.is_none());
-        sched_guard.running_thread.replace(cur_thread);
-
-        unsafe { self.0.force_unlock() };
+    /// Clean up after thread switch.
+    ///
+    /// Enables interrupt and unlock the scheduler.
+    ///
+    /// # Safety
+    /// This should only be called in correspondance to a previously called
+    /// `before_switch` on the current **CPU**.
+    unsafe fn after_switch() {
+        // SAFEtY: Unlock scheduler for the current core.
+        unsafe { SCHED.0.force_unlock() };
+        // SAFETY: Enable interrupt on the current core.
+        unsafe { InterruptGuard::raw_unlock() };
     }
 }
 
@@ -117,18 +116,4 @@ enum ThreadState {
     Running,
     Ready,
     Zombie,
-}
-
-global_asm!(include_str!("sched/switch.S"));
-unsafe extern "C" {
-    /// Switch thread to the thread with `new_rsp`.
-    ///
-    /// This function blocks until the current thread is switched back.
-    ///
-    /// # Safety
-    /// - `old_rsp` should point to the currently executing `Thread`'s `rsp`
-    ///   field.
-    /// - `new_rsp` should point to top of new `Thread`'s stack.
-    /// - Caller should hold an [`InterruptGuard`] until this function returns.
-    unsafe fn switch_to(old_rsp: *mut u64, new_rsp: u64);
 }
