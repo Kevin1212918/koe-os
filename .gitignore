@@ -2,4 +2,4 @@
 *.iso
 iso/boot/koe-os
 iso/boot/initrd
-log/*
+log
