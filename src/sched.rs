@@ -5,12 +5,16 @@ use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::hint::unreachable_unchecked;
 use core::marker::PhantomPinned;
 use core::mem::{offset_of, MaybeUninit};
+use core::pin::Pin;
 
-use switch::switch_to;
-use thread::{Thread, THREAD_LINK_OFFSET};
+use pinned_init::InPlaceInit;
+use switch::{switch_to, INIT_KTHREAD_STACK};
+use thread::{KThread, THREAD_LINK_OFFSET};
 
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{Link, Linked, LinkedList};
+use crate::common::log::ok;
+use crate::common::{die, hlt};
 use crate::interrupt::InterruptGuard;
 use crate::mem::addr::PageSize;
 use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
@@ -18,97 +22,167 @@ use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
 mod switch;
 pub mod thread;
 
-static SCHED: spin::Lazy<Scheduler> = spin::Lazy::new(|| Scheduler::new());
+static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
+
+pub fn init_scheduler() { SCHED.lock().insert(Scheduler::new()); }
+/// # Safety
+/// Should be called at the end of initialization to switch to the idle task.
+pub fn init_switch_to_idle() -> ! {
+    let idle = Scheduler::new_kthread(idle, 0);
+    let new_rsp = idle.meta.rsp;
+    Box::leak(idle);
+    let mut dummy: usize = 0;
+    InterruptGuard::raw_lock();
+    SCHED.lock().as_mut().unwrap().is_disabled = false;
+    unsafe { switch_to(&raw mut dummy, new_rsp) };
+    unreachable!()
+}
 
 /// Per-CPU structure managing currently running threads.
-struct SchedulerRecord {
-    running_thread: Option<Box<Thread>>,
-    ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<Thread>>,
-    zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<Thread>>,
+pub struct Scheduler {
+    ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
+    zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
+    idle: Option<Box<KThread>>,
+    is_disabled: bool,
 }
-struct Scheduler(spin::Mutex<SchedulerRecord>);
 impl Scheduler {
     fn new() -> Self {
-        Scheduler(spin::Mutex::new(SchedulerRecord {
-            running_thread: None,
-            ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<Thread>>::new_in(Global),
-            zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<Thread>>::new_in(Global),
-        }))
+        Scheduler {
+            ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
+            zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
+            idle: None,
+            is_disabled: true,
+        }
+    }
+
+    fn next_kthread(&mut self) -> Option<Box<KThread>> {
+        self.ready_threads
+            .front_mut()
+            .remove()
+            .or_else(|| self.idle.take())
+    }
+
+    /// Return `None` if scheduler does not keep track of the state.
+    fn queue_mut(
+        &mut self,
+        state: ThreadState,
+    ) -> Option<&mut LinkedList<THREAD_LINK_OFFSET, Box<KThread>>> {
+        match state {
+            ThreadState::Ready => Some(&mut self.ready_threads),
+            ThreadState::Zombie => Some(&mut self.zombie_threads),
+            // SAFETY: we check at start of the function that new_state is not running.
+            ThreadState::Running => None,
+        }
     }
 
     /// Creates and schedule a new kernel thread which will call `main`.
-    pub fn new_thread(main: fn()) {}
-    /// Schedules a new thread.
-    ///
-    /// # Safety
-    /// Stack of the new thread should be safe to be switched to.
-    unsafe fn schedule(new: Box<Thread>) {}
+    fn new_kthread(main: fn(), priority: u8) -> Box<KThread> {
+        let init_stack = INIT_KTHREAD_STACK.as_uninit_usizes();
+        let new = Box::pin_init(KThread::new(init_stack, main, priority)).unwrap();
 
-    /// Yield to another thread if available.
-    pub fn yield_thread(&self) { Self::reschedule(ThreadState::Ready); }
-
-    fn reschedule(new_state: ThreadState) {
-        let cur_new_opt = Self::before_switch(new_state);
-        let Some((cur, new)) = cur_new_opt else {
-            return;
-        };
-        // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
-        // scheduler are locked by before_switch.
-        unsafe { switch_to(cur, new) };
-        // SAFETY: called incorrespondance to before_switch.
-        unsafe { Self::after_switch() };
+        // FIXME: Allow threads to store pinned box.
+        // SAFETY:
+        unsafe { Pin::into_inner_unchecked(new) }
     }
 
-    /// Prepares thread switch.
-    ///
-    /// Disable interrupt and lock the scheduler.
-    ///
-    /// Move current thread from `running_thread` to the thread queue as
-    /// specified by `ThreadState`, then try find a new thread from
-    /// `ready_threads` into the `running_thread` to be executed.
-    ///
-    /// Returns `None` if no new thread is available to execute. Otherwise
-    /// return a pointer to current thread's `rsp` field, and the new
-    /// thread's `rsp`.
-    fn before_switch(new_state: ThreadState) -> Option<(*mut u64, u64)> {
+    /// Yield to another thread if available.
+    pub fn yield_kthread() { Self::reschedule(ThreadState::Ready); }
+
+    /// Fails when scheduling to running state.
+    fn schedule(thread: Box<KThread>, state: ThreadState) {
+        debug_assert!(!matches!(state, ThreadState::Running));
         // Disable interrupt on current core.
-        InterruptGuard::raw_lock();
+        let _intrpt = InterruptGuard::new();
         // Lock scheduler for the current core.
-        let sched = spin::MutexGuard::leak(SCHED.0.lock());
+        let mut sched = SCHED.lock();
+        let sched = sched.as_mut().expect("Scheduler should be initialized");
+        if sched.is_disabled {
+            return;
+        }
+        if let Some(que) = sched.queue_mut(state) {
+            que.push_back(thread);
+        }
+    }
+
+    fn reschedule(new_state: ThreadState) {
+        if matches!(new_state, ThreadState::Running) {
+            return;
+        }
+
+        // Disable interrupt on current core.
+        let intrpt = InterruptGuard::new();
+        // Lock scheduler for the current core.
+        let mut sched_lock = SCHED.lock();
+        let sched = sched_lock
+            .as_mut()
+            .expect("Scheduler should be initialized");
+
 
         // SAFETY: The access does not overlap with other access since we are holding
         // scheduler lock.
-        let new_thread = sched.ready_threads.front_mut().remove()?;
-        let new_thread_rsp = new_thread.meta.rsp;
-        let mut cur_thread = sched
-            .running_thread
-            .replace(new_thread)
-            .expect("There should always be a running thread");
-
-        let que = match new_state {
-            ThreadState::Ready => &mut sched.ready_threads,
-            ThreadState::Zombie => &mut sched.zombie_threads,
-            // SAFETY: we check at start of the function that new_state is not running.
-            ThreadState::Running => unsafe { unreachable_unchecked() },
+        let Some(mut new_thread) = sched.next_kthread() else {
+            return;
         };
 
-        let cur_thread_rsp = &raw mut cur_thread.meta.rsp;
-        que.push_back(cur_thread);
-        Some((cur_thread_rsp, new_thread_rsp))
-    }
+        let cur_meta = KThread::cur_meta(&intrpt);
+        let cur_idle = KThread::cur_meta(&intrpt).priority == 0;
+        let cpu_id = cur_meta.cpu_id;
+        // FIXME: This is likely to still cause UB.
+        // Note the cast here is appropriate because outside scheduler, there is no
+        // reference to rsp.
+        let cur_thread_rsp = (&raw const cur_meta.rsp).cast_mut();
+        drop(cur_meta);
 
-    /// Clean up after thread switch.
-    ///
-    /// Enables interrupt and unlock the scheduler.
-    ///
-    /// # Safety
-    /// This should only be called in correspondance to a previously called
-    /// `before_switch` on the current **CPU**.
-    unsafe fn after_switch() {
-        // SAFEtY: Unlock scheduler for the current core.
-        unsafe { SCHED.0.force_unlock() };
-        // SAFETY: Enable interrupt on the current core.
-        unsafe { InterruptGuard::raw_unlock() };
+        new_thread.meta.cpu_id = cpu_id;
+        let new_thread_rsp = new_thread.meta.rsp;
+
+        let cur_thread = KThread::cur_thread_ptr();
+        let cur_thread = unsafe { Box::from_raw(cur_thread) };
+
+        if cur_idle {
+            debug_assert!(sched.idle.is_none());
+            sched.idle.insert(cur_thread);
+        } else {
+            sched.queue_mut(new_state).unwrap().push_back(cur_thread);
+        }
+
+        // We will get the memory back when new thread schedules itself back.
+        Box::leak(new_thread);
+        drop(sched_lock);
+
+        // Note per-CPU structures are no longer for the current thread after switch_to.
+
+        // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
+        // scheduler are locked by before_switch.
+        unsafe { switch_to(cur_thread_rsp, new_thread_rsp) };
+        drop(intrpt);
+    }
+}
+
+/// Entry point for a new `KThread`.
+extern "C" fn kthread_entry() -> ! {
+    // SAFETY: Unlock scheduler for the current core.
+    let main = {
+        let intrpt = InterruptGuard::new();
+        KThread::cur_meta(&intrpt).main
+    };
+
+    // SAFETY: Enable interrupt on the current core.
+    unsafe { InterruptGuard::raw_unlock() };
+    main();
+
+    // Exit by scheduling as zombie.
+    Scheduler::reschedule(ThreadState::Zombie);
+
+    // SAFETY: rescheduling to zombie will stop the thread from being switched to
+    // again.
+    unreachable!()
+}
+
+fn idle() {
+    loop {
+        ok!("idling!");
+        hlt();
     }
 }
 

@@ -175,7 +175,7 @@ _start_err:
     hlt
 
 .code64
-.extern kmain
+.extern kentry
 _start_long_mode:
     lea rsp, stack_top
     mov ax, 0
@@ -187,4 +187,4 @@ _start_long_mode:
 
     /* Move Multiboot2 boot information pointer to function arg 1 */
     mov edi, ebx
-    jmp kmain
+    jmp kentry

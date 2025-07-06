@@ -1,6 +1,6 @@
 use core::panic::PanicInfo;
 
-use crate::common::{hlt, log};
+use crate::common::{die, log};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -9,5 +9,5 @@ fn panic(info: &PanicInfo) -> ! {
         info.message(),
         info.location(),
     ));
-    hlt()
+    die()
 }

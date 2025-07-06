@@ -10,11 +10,16 @@ pub const GiB: usize = 1 << 30;
 pub const TiB: usize = 1 << 40;
 
 #[inline(always)]
-pub fn hlt() -> ! {
-    loop {
-        // SAFETY: hlt is safe
-        unsafe { asm!("hlt") };
-    }
+pub fn die() -> ! {
+    // SAFETY: hlt is safe
+    unsafe { asm!("cli", "hlt") };
+    unreachable!()
+}
+
+#[inline(always)]
+pub fn hlt() {
+    // SAFETY: hlt is safe
+    unsafe { asm!("hlt") };
 }
 
 pub mod array_forest;

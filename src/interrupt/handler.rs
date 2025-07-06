@@ -1,7 +1,7 @@
 use core::arch::global_asm;
 
 use super::pic::ack;
-use super::{InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF, VECTOR_PIC};
+use super::{timer, InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF, VECTOR_PIC};
 use crate::common::log::error;
 use crate::common::{hlt, log};
 use crate::drivers::ps2;
@@ -36,10 +36,16 @@ pub extern "C" fn exception_handler(vec: InterruptVector, stack: &InterruptStack
 pub extern "C" fn irq_handler(vec: InterruptVector, stack: &InterruptStack) {
     let irq = vec - VECTOR_PIC;
     match irq {
+        0 => timer::timer_handler(),
         1 => ps2::ps2_keyboard_handler(),
         _ => (),
     }
     ack(irq);
+
+    match irq {
+        0 => timer::timer_scheduler(),
+        _ => (),
+    }
 }
 // x86-64 stuff
 global_asm!(include_str!("handler.S"));

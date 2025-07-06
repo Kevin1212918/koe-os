@@ -8,7 +8,8 @@
     sync_unsafe_cell,
     allocator_api,
     strict_overflow_ops,
-    const_alloc_layout
+    const_alloc_layout,
+    maybe_uninit_uninit_array_transpose
 )]
 #![allow(clippy::needless_range_loop, private_interfaces)]
 #![deny(
@@ -29,7 +30,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::ptr::slice_from_raw_parts_mut;
 
-use common::{hlt, log};
+use common::{die, log};
 use multiboot2::{BootInformation, BootInformationHeader};
 
 use crate::common::log::{error, ok};
@@ -50,7 +51,7 @@ mod usr;
 #[no_mangle]
 #[allow(clippy::missing_panics_doc)]
 /// Kernel entry point.
-pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
+pub extern "C" fn kentry(mbi_ptr: u32) -> ! {
     serial::init();
     ok!("serial ports initialzed");
 
@@ -82,9 +83,10 @@ pub extern "C" fn kmain(mbi_ptr: u32) -> ! {
     ok!("interrupt initialized");
     drivers::init();
     ok!("drivers initialized");
+    sched::init_scheduler();
+    ok!("scheduler initialized");
     ok!("kernel initialized");
-
-    hlt()
+    sched::init_switch_to_idle()
 }
 
 // FIXME: Initrd memory is not handled by global allocator. This is unsafe.

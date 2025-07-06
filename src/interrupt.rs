@@ -37,6 +37,7 @@ impl InterruptGuard {
             enable_interrupt();
         }
     }
+    pub fn lock_cnt() -> usize { INTERRUPT_GUARD_CNT.load(atomic::Ordering::Relaxed) }
 }
 
 impl Drop for InterruptGuard {
@@ -62,6 +63,7 @@ pub fn init() {
     init_pic();
 
     pic::mask_all();
+    pic::unmask(0);
     pic::unmask(1);
     enable_interrupt();
 }

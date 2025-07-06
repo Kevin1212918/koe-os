@@ -7,13 +7,13 @@ use crate::drivers::vga::{Color, VGA_BUFFER};
 pub mod mac {
     macro_rules! ok {
         ($($arg:tt)*) => {
-            log::ok(format_args!($($arg)*))
+            ok(format_args!($($arg)*))
         };
     }
     pub(crate) use ok;
     macro_rules! error {
         ($($arg:tt)*) => {
-            log::error(format_args!($($arg)*))
+            error(format_args!($($arg)*))
         };
     }
     pub(crate) use error;
