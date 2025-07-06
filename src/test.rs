@@ -3,11 +3,11 @@ use alloc::vec::Vec;
 pub fn test_mem() {
     // FIXME: reorganize test cases
     let mut test = Vec::new();
-    for i in 0..1200 {
+    for i in 0..2000 {
         test.push(i);
     }
     let mut test2: Vec<u32> = Vec::new();
-    for i in 0..1200 {
+    for i in 0..2000 {
         test2.push(i);
     }
     for i in test.iter().enumerate() {
@@ -22,7 +22,7 @@ pub fn test_mem() {
     }
     let mut test3 = Vec::new();
     test3.reserve_exact(43);
-    for j in 0..1200 {
+    for j in 0..2000 {
         let mut inner = Vec::new();
         inner.reserve_exact(15);
         for i in 0..10 {

@@ -1,9 +1,9 @@
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 
 use super::pic::ack;
 use super::{timer, InterruptStack, InterruptVector, VECTOR_DF, VECTOR_PF, VECTOR_PIC};
 use crate::common::log::error;
-use crate::common::{hlt, log};
+use crate::common::{die, log};
 use crate::drivers::ps2;
 
 
@@ -12,13 +12,19 @@ use crate::drivers::ps2;
 struct Isr(pub extern "C" fn());
 
 fn page_fault_handler(stack: &InterruptStack) {
+    let cr2: u64;
+    unsafe {
+        asm! {"mov r11, cr2", out("r11") cr2}
+    };
     error!("Page Fault!");
-    hlt();
+    error!("cr2: {:#x}", cr2);
+    error!("{:?}", stack);
+    die();
 }
 
 fn double_fault_handler(stack: &InterruptStack) {
     error!("Double Fault!");
-    hlt();
+    die();
 }
 
 fn default_exn_handler() {}

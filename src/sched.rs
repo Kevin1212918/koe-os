@@ -13,7 +13,7 @@ use thread::{KThread, THREAD_LINK_OFFSET};
 
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{Link, Linked, LinkedList};
-use crate::common::log::ok;
+use crate::common::log::{error, ok};
 use crate::common::{die, hlt};
 use crate::interrupt::InterruptGuard;
 use crate::mem::addr::PageSize;

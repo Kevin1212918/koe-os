@@ -231,6 +231,7 @@ const VECTOR_CP: InterruptVector = 21;
 const VECTOR_PIC: InterruptVector = 32;
 
 #[repr(C)]
+#[derive(Debug)]
 struct InterruptStack {
     errno: usize,
     ip: usize,

@@ -25,12 +25,12 @@ unsafe impl Linked<THREAD_LINK_OFFSET> for KThread {}
 #[pin_data]
 #[repr(C, align(8192))]
 pub struct KThread {
-    pub(super) meta: Metadata,
-    link: Link,
-    #[pin]
-    stack: [MaybeUninit<usize>; KERNEL_STACK_ARRAY_LEN],
     #[pin]
     _pin: PhantomPinned,
+    #[pin]
+    stack: [MaybeUninit<usize>; KERNEL_STACK_ARRAY_LEN],
+    pub(super) meta: Metadata,
+    link: Link,
 }
 impl KThread {
     /// An inplace initializer for a new thread with the given stack. Note if
@@ -50,13 +50,10 @@ impl KThread {
                 let stack = stack.as_mut_unchecked();
 
                 let copy_len = stack.len().min(init_stack.len());
-                stack[0..copy_len].copy_from_slice(&init_stack[0..copy_len]);
+                stack[KERNEL_STACK_ARRAY_LEN - copy_len..KERNEL_STACK_ARRAY_LEN]
+                    .copy_from_slice(&init_stack[0..copy_len]);
 
-                let rsp = &raw mut (*slot).stack[copy_len] as usize;
-                // Offset rsp by 1 so it is pointing at the
-                // last element.
-                let rsp = rsp - size_of::<usize>();
-
+                let rsp = &raw mut (*slot).stack[KERNEL_STACK_ARRAY_LEN - copy_len] as usize;
                 let meta = &raw mut (*slot).meta;
                 ptr::write(meta, Metadata {
                     is_usr: false,

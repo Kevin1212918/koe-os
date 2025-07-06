@@ -36,14 +36,14 @@ unsafe extern "C" {
 /// to the new thread's address aligned stack.
 #[repr(C)]
 pub(super) struct InitKThreadStack {
-    null: u64, // This is here to fix kthread_entry alignment.
-    kthread_entry: extern "C" fn() -> !,
-    rbp: u64,
-    rbx: u64,
-    r12: u64,
-    r13: u64,
-    r14: u64,
     r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    rbx: u64,
+    rbp: u64,
+    kthread_entry: extern "C" fn() -> !,
+    null: u64, // This is here to fix kthread_entry alignment.
 }
 impl InitKThreadStack {
     pub fn as_uninit_usizes(&self) -> &[MaybeUninit<usize>] {
@@ -66,12 +66,12 @@ impl InitKThreadStack {
 }
 
 pub(super) static INIT_KTHREAD_STACK: InitKThreadStack = InitKThreadStack {
-    null: 0,
-    kthread_entry,
-    rbp: 0,
-    rbx: 0,
-    r12: 0,
-    r13: 0,
-    r14: 0,
     r15: 0,
+    r14: 0,
+    r13: 0,
+    r12: 0,
+    rbx: 0,
+    rbp: 0,
+    kthread_entry,
+    null: 0,
 };
