@@ -39,7 +39,7 @@ pub fn init_switch_to_idle() -> ! {
     let new_rsp = idle.meta.rsp;
     Box::leak(idle);
     let mut dummy: usize = 0;
-    InterruptGuard::raw_lock();
+    InterruptGuard::new().leak();
     SCHED.lock().as_mut().unwrap().is_disabled = false;
     unsafe { switch_to(&raw mut dummy, new_rsp) };
     unreachable!()
@@ -94,23 +94,27 @@ impl Scheduler {
     }
 }
 
-pub fn reschedule(new_state: ThreadState) {
+/// Yields to a new thread while rescheduling the current thread to `new_state`.
+///
+/// This call blocks until the thread is switched back, or never returns if
+/// `new_state` is [`ThreadState::Zombie`].
+pub fn reschedule(new_state: ThreadState, intrpt: InterruptGuard) {
     if matches!(new_state, ThreadState::Running) {
         return;
     }
+    if InterruptGuard::cnt() != 1 {
+        error!("Entering sched::reschedule with more than 1 interrupt guard live.");
+    }
 
-    // Disable interrupt on current core.
-    let intrpt = InterruptGuard::new();
     // Lock scheduler for the current core.
     let mut sched_lock = SCHED.lock();
-    let sched = sched_lock
-        .as_mut()
-        .expect("Scheduler should be initialized");
+    let Some(sched) = sched_lock.as_mut() else {
+        return;
+    };
 
     if sched.is_disabled {
         return;
     }
-
 
     // SAFETY: The access does not overlap with other access since we are holding
     // scheduler lock.
@@ -131,11 +135,12 @@ pub fn reschedule(new_state: ThreadState) {
     let new_thread_rsp = new_thread.meta.rsp;
 
     let cur_thread = KThread::cur_thread_ptr();
+    // SAFETY: All threads were allocated on stack.
     let cur_thread = unsafe { Box::from_raw(cur_thread) };
 
     if cur_idle {
         debug_assert!(sched.idle.is_none());
-        sched.idle.insert(cur_thread);
+        sched.idle = Some(cur_thread);
     } else {
         sched.queue_mut(new_state).unwrap().push_back(cur_thread);
     }
@@ -153,22 +158,31 @@ pub fn reschedule(new_state: ThreadState) {
 }
 
 /// Yield to another thread if available.
-pub fn yield_kthread() { reschedule(ThreadState::Ready); }
+pub fn yield_kthread() {
+    reschedule(
+        ThreadState::Ready,
+        InterruptGuard::new(),
+    );
+}
 
 /// Entry point for a new `KThread`.
 extern "C" fn kthread_entry() -> ! {
-    // SAFETY: Unlock scheduler for the current core.
-    let main = {
-        let intrpt = InterruptGuard::new();
-        KThread::cur_meta(&intrpt).main
-    };
+    // SAFETY: Jumping from switch_to.
+    let intrpt = unsafe { InterruptGuard::reclaim() };
+    if InterruptGuard::cnt() != 1 {
+        error!("exiting switch_to with more than 1 interrupt guard live.");
+    }
+    let main = KThread::cur_meta(&intrpt).main;
+    drop(intrpt);
 
-    // SAFETY: Enable interrupt on the current core.
-    unsafe { InterruptGuard::raw_unlock() };
+    debug_assert!(InterruptGuard::cnt() == 0);
     main();
 
     // Exit by scheduling as zombie.
-    reschedule(ThreadState::Zombie);
+    reschedule(
+        ThreadState::Zombie,
+        InterruptGuard::new(),
+    );
 
     // SAFETY: rescheduling to zombie will stop the thread from being switched to
     // again.
@@ -194,7 +208,7 @@ fn idle2() {
     }
 }
 
-enum ThreadState {
+pub enum ThreadState {
     Running,
     Ready,
     Zombie,

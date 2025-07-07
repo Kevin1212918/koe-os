@@ -85,6 +85,7 @@ pub extern "C" fn kentry(mbi_ptr: u32) -> ! {
     ok!("drivers initialized");
     sched::init_scheduler();
     ok!("scheduler initialized");
+
     ok!("kernel initialized");
     sched::init_switch_to_idle()
 }

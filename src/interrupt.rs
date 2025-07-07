@@ -1,5 +1,6 @@
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
+use core::mem::forget;
 use core::ops::Range;
 use core::sync::atomic::{self, AtomicUsize};
 
@@ -25,19 +26,12 @@ impl InterruptGuard {
         INTERRUPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
         Self()
     }
-    pub fn raw_lock() {
-        disable_interrupt();
-        INTERRUPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
-    }
     /// # Safety
-    /// `raw_unlock` should always correspond to a previously called `raw_lock`.
-    pub unsafe fn raw_unlock() {
-        let prev_cnt = INTERRUPT_GUARD_CNT.fetch_sub(1, atomic::Ordering::Relaxed);
-        if prev_cnt == 1 {
-            enable_interrupt();
-        }
-    }
-    pub fn lock_cnt() -> usize { INTERRUPT_GUARD_CNT.load(atomic::Ordering::Relaxed) }
+    /// `reclaim` should always correspond to a previously leaked guard.
+    pub unsafe fn reclaim() -> Self { Self() }
+
+    pub fn leak(self) { forget(self) }
+    pub fn cnt() -> usize { INTERRUPT_GUARD_CNT.load(atomic::Ordering::Relaxed) }
 }
 
 impl Drop for InterruptGuard {
@@ -51,8 +45,6 @@ impl Drop for InterruptGuard {
 
 /// Per-CPU tracker for the number of interrupt guard in the kernel.
 static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
-
-pub type IrqHandler = fn();
 
 // x86-64 stuff
 
@@ -163,7 +155,7 @@ impl InterruptDesc {
     const TYPE_IDXS: Range<usize> = 8..12;
 
     fn exn(addr: u64) -> Self { Self::new(addr, GateTyp::Trap, Privilege::Kernel) }
-    fn irq(addr: u64) -> Self { Self::new(addr, GateTyp::Trap, Privilege::Kernel) }
+    fn irq(addr: u64) -> Self { Self::new(addr, GateTyp::Intrpt, Privilege::Kernel) }
     fn new(addr: u64, typ: GateTyp, dpl: Privilege) -> Self {
         let addr_bits = addr.view_bits::<Lsb0>();
         let low_low_offset = addr_bits[0..16].load_le();
@@ -229,6 +221,8 @@ const VECTOR_VE: InterruptVector = 20;
 const VECTOR_CP: InterruptVector = 21;
 
 const VECTOR_PIC: InterruptVector = 32;
+const VECTOR_TIMER: InterruptVector = 32;
+const VECTOR_KEYBOARD: InterruptVector = 32;
 
 #[repr(C)]
 #[derive(Debug)]
