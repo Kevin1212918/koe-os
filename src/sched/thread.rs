@@ -1,12 +1,18 @@
+use alloc::boxed::Box;
+use core::alloc::Allocator;
 use core::arch::asm;
 use core::convert::Infallible;
 use core::marker::PhantomPinned;
 use core::mem::{offset_of, MaybeUninit};
+use core::pin::Pin;
 use core::ptr::metadata;
 use core::{ptr, slice, u64};
 
-use pinned_init::{init_from_closure, pin_data, pin_init, pin_init_from_closure, PinInit};
+use pinned_init::{
+    init_from_closure, pin_data, pin_init, pin_init_from_closure, InPlaceInit as _, PinInit,
+};
 
+use super::kthread_entry;
 use crate::common::ll::{Link, Linked};
 use crate::interrupt::InterruptGuard;
 use crate::mem::addr::PageSize;
@@ -68,6 +74,14 @@ impl KThread {
         }
     }
 
+    pub fn boxed(main: fn(), priority: u8) -> Box<Self> {
+        let init_stack = INIT_KTHREAD_STACK.as_uninit_usizes();
+        let new = Box::pin_init(KThread::new(init_stack, main, priority)).unwrap();
+
+        // FIXME: Allow threads to store pinned box.
+        // SAFETY:
+        unsafe { Pin::into_inner_unchecked(new) }
+    }
 
     pub fn cur_meta(_intrpt: &InterruptGuard) -> &Metadata {
         let thread_ptr = Self::cur_thread_ptr();
@@ -120,3 +134,50 @@ pub struct Metadata {
     /// Priority of the thread. Lower value is higher priority.
     pub(super) priority: u8,
 }
+
+
+/// Initial `KThread` stack.
+///
+/// When building a new `KThread`, `INIT_KTHREAD_STACK` will be byte-wise copied
+/// to the new thread's address aligned stack.
+#[repr(C)]
+pub(super) struct InitKThreadStack {
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    rbx: u64,
+    rbp: u64,
+    kthread_entry: extern "C" fn() -> !,
+    null: u64, // This is here to fix kthread_entry alignment.
+}
+impl InitKThreadStack {
+    pub fn as_uninit_usizes(&self) -> &[MaybeUninit<usize>] {
+        let base: *const MaybeUninit<usize> = (self as *const InitKThreadStack).cast();
+        let len = size_of::<InitKThreadStack>() / size_of::<usize>();
+        const _: () = assert!(size_of::<InitKThreadStack>() % size_of::<usize>() == 0);
+        const _: () = assert!(align_of::<InitKThreadStack>() <= align_of::<usize>());
+
+        // SAFETY:
+        // base is not null since it comes from `self`.
+        // base is aligned to usize since align of InitKThreadStack is smaller than that
+        // of usize. the memory range pointed is len * size_of(usize), which
+        // equals size_of(InitKThreadStack).
+        // MaybeUninit is always initialized.
+        // Lifetime inherited from `self` prevents mutation for duration of the
+        // lifetime.
+        // InitiKThreadStack size does not overflow.
+        unsafe { slice::from_raw_parts(base, len) }
+    }
+}
+
+pub(super) static INIT_KTHREAD_STACK: InitKThreadStack = InitKThreadStack {
+    r15: 0,
+    r14: 0,
+    r13: 0,
+    r12: 0,
+    rbx: 0,
+    rbp: 0,
+    kthread_entry,
+    null: 0,
+};
