@@ -9,18 +9,8 @@ pub const GiB: usize = 1 << 30;
 #[allow(non_upper_case_globals)]
 pub const TiB: usize = 1 << 40;
 
-#[inline(always)]
-pub fn die() -> ! {
-    // SAFETY: hlt is safe
-    unsafe { asm!("cli", "hlt") };
-    unreachable!()
-}
-
-#[inline(always)]
-pub fn hlt() {
-    // SAFETY: hlt is safe
-    unsafe { asm!("hlt") };
-}
+pub type InstrPtr = usize;
+pub type StackPtr = usize;
 
 pub mod array_forest;
 pub mod ll;

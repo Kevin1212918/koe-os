@@ -1,6 +1,7 @@
 use core::panic::PanicInfo;
 
-use crate::common::{die, log};
+use crate::arch::die;
+use crate::common::log;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

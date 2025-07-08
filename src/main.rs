@@ -30,7 +30,6 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::ptr::slice_from_raw_parts_mut;
 
-use common::{die, hlt, log};
 use multiboot2::{BootInformation, BootInformationHeader};
 use sched::thread::KThread;
 use sched::{ThreadState, SCHED};

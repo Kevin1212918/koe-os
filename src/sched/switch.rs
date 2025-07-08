@@ -16,16 +16,16 @@ unsafe extern "C" {
     /// This function blocks until the current thread is switched back.
     ///
     /// Before calling `switch_to`, caller should disable interrupt with
-    /// `InterruptGuard::raw_lock` for its executing CPU. The new thread may
+    /// `IntrptGuard::raw_lock` for its executing CPU. The new thread may
     /// release the locks on interrupt.
     ///
     /// After exiting from `switch_to`, interrupt on the new CPU is guarenteed
-    /// to be disabled through `InterruptGuard::raw_lock`.
+    /// to be disabled through `IntrptGuard::raw_lock`.
     ///
     /// # Safety
     /// - `old_rsp` should point to the currently executing `Thread`'s `rsp`
     ///   field.
     /// - `new_rsp` should point to top of new `Thread`'s stack.
-    /// - Interrupt should be disabled through `InterruptGuard::raw_lock`.
+    /// - Interrupt should be disabled through `IntrptGuard::raw_lock`.
     pub unsafe fn switch_to(old_rsp: *mut usize, new_rsp: usize);
 }

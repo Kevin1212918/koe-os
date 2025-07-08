@@ -14,7 +14,7 @@ use pinned_init::{
 
 use super::kthread_entry;
 use crate::common::ll::{Link, Linked};
-use crate::interrupt::InterruptGuard;
+use crate::interrupt::IntrptGuard;
 use crate::mem::addr::PageSize;
 
 pub(super) const THREAD_LINK_OFFSET: usize = offset_of!(KThread, link);
@@ -83,7 +83,7 @@ impl KThread {
         unsafe { Pin::into_inner_unchecked(new) }
     }
 
-    pub fn cur_meta(_intrpt: &InterruptGuard) -> &Metadata {
+    pub fn cur_meta(_intrpt: &IntrptGuard) -> &Metadata {
         let thread_ptr = Self::cur_thread_ptr();
         // SAFETY: dereference in place expr is safe.
         let meta_ptr = unsafe { &raw const (*thread_ptr).meta };
@@ -97,7 +97,7 @@ impl KThread {
     /// # Safety
     /// Caller should ensure there are no live reference to the metadata.
     #[allow(clippy::mut_from_ref)]
-    pub unsafe fn cur_meta_mut(_intrpt: &InterruptGuard) -> &mut Metadata {
+    pub unsafe fn cur_meta_mut(_intrpt: &IntrptGuard) -> &mut Metadata {
         let thread_ptr = Self::cur_thread_ptr();
         // SAFETY: dereference in place expr is safe.
         let meta_ptr = unsafe { &raw mut (*thread_ptr).meta };

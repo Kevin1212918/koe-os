@@ -1,11 +1,11 @@
-.extern exception_handler
+.extern exception_sr
 
 .macro EXN_ENTRY int_vec
 isr_\int_vec:
   sub rsp, 0x8
   push \int_vec
 
-  jmp _do_exception_handler
+  jmp _do_exception_sr
 .section .data
 .quad isr_\int_vec
 .section .text
@@ -15,7 +15,7 @@ isr_\int_vec:
 isr_\int_vec:
   push \int_vec
 
-  jmp _do_exception_handler
+  jmp _do_exception_sr
 .section .data
 .quad isr_\int_vec
 .section .text
@@ -27,7 +27,7 @@ isr_\int_vec:
 .section .text
 .endm
 
-_do_exception_handler: 
+_do_exception_sr: 
   push rax
   push rdi
   push rsi
@@ -42,7 +42,7 @@ _do_exception_handler:
   mov rdi, [rsp+0x50]
   lea rsi, [rsp+0x58]
   
-  call exception_handler
+  call exception_sr
 
   add rsp, 0x8
   pop r11
@@ -63,14 +63,14 @@ isr_\int_vec:
   sub rsp, 0x8
   push \int_vec
 
-  jmp _do_irq_handler
+  jmp _do_irq_sr
 .section .data
 .quad isr_\int_vec
 .section .text
 
 
 .endm
-_do_irq_handler: 
+_do_irq_sr: 
   push rax
   push rdi
   push rsi
@@ -85,7 +85,7 @@ _do_irq_handler:
   mov rdi, [rsp+0x50]
   lea rsi, [rsp+0x58]
   
-  call irq_handler
+  call irq_sr
 
   add rsp, 0x8
   pop r11

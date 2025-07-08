@@ -1,13 +1,13 @@
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use super::pic::ack;
-use super::InterruptGuard;
 use crate::common::log::ok;
+use crate::interrupt::IntrptGuard;
 use crate::sched::{self, Scheduler, ThreadState};
 
 static TICK: AtomicU32 = AtomicU32::new(0);
 
-pub fn timer_handler(intrpt: InterruptGuard) {
+pub fn timer_handler(intrpt: IntrptGuard) {
     let tick = TICK.fetch_add(1, Ordering::Relaxed);
     ack(0);
 

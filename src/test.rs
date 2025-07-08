@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::common::hlt;
+use crate::arch::hlt;
 use crate::common::log::ok;
 use crate::sched::thread::KThread;
 use crate::sched::{self, ThreadState};
