@@ -40,6 +40,7 @@ use crate::common::log::{error, ok};
 use crate::drivers::serial;
 use crate::mem::PhysicalRemapSpace;
 
+mod arch;
 mod boot;
 mod common;
 mod drivers;
