@@ -1,5 +1,4 @@
 use core::arch::asm;
-use core::u8;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
@@ -7,12 +6,12 @@ pub struct Port(pub u16);
 pub struct RPort(pub u16);
 pub struct WPort(pub u16);
 
-impl Into<RPort> for Port {
-    fn into(self) -> RPort { RPort(self.0) }
+impl From<Port> for RPort {
+    fn from(val: Port) -> Self { RPort(val.0) }
 }
 
-impl Into<WPort> for Port {
-    fn into(self) -> WPort { WPort(self.0) }
+impl From<Port> for WPort {
+    fn from(val: Port) -> Self { WPort(val.0) }
 }
 
 #[inline(always)]

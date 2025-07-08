@@ -1,6 +1,6 @@
 use core::fmt::Write;
 
-use crate::common::pmio::{outb, Port};
+use crate::arch::pmio::{outb, Port};
 use crate::mem::kernel_offset_vma;
 
 /// Address of start of VGA MMIO

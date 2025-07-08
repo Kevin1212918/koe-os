@@ -27,9 +27,6 @@ pub mod ll;
 pub mod log;
 pub mod panic;
 
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-pub mod pmio;
-
 #[repr(u8)]
 pub enum Privilege {
     User = 3,

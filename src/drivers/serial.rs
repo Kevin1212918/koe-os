@@ -2,7 +2,7 @@
 
 use core::fmt::Write;
 
-use crate::common::pmio::{inb, outb, Port};
+use crate::arch::pmio::{inb, outb, Port};
 
 pub static COM1: spin::Mutex<Serial> = spin::Mutex::new(Serial(0));
 

@@ -2,7 +2,6 @@ use core::arch::global_asm;
 mod multiboot2_header {
     use crate::arch;
 
-
     #[link_section = ".bootstrap.multiboot2_header"]
     #[no_mangle]
     #[used]

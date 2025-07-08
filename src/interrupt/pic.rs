@@ -1,5 +1,5 @@
 use super::VECTOR_PIC;
-use crate::common::pmio::{inb, outb, Port};
+use crate::arch::pmio::{inb, outb, Port};
 
 const PIC1_CMD_PORT: Port = Port(0x20);
 const PIC1_DATA_PORT: Port = Port(0x21);

@@ -3,7 +3,7 @@ use core::cell::SyncUnsafeCell;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb as Rb;
 
-use crate::common::pmio::{inb, Port, RPort, WPort};
+use crate::arch::pmio::{inb, Port, RPort, WPort};
 use crate::io::keyboard::keycode::*;
 use crate::io::keyboard::{KeyEvent, Keyboard, VirtKeyboard};
 
