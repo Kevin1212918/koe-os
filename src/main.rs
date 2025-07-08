@@ -30,8 +30,11 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::ptr::slice_from_raw_parts_mut;
 
-use common::{die, log};
+use common::{die, hlt, log};
 use multiboot2::{BootInformation, BootInformationHeader};
+use sched::thread::KThread;
+use sched::{ThreadState, SCHED};
+use test::test_kthread;
 
 use crate::common::log::{error, ok};
 use crate::drivers::serial;
@@ -83,11 +86,11 @@ pub extern "C" fn kentry(mbi_ptr: u32) -> ! {
     ok!("interrupt initialized");
     drivers::init();
     ok!("drivers initialized");
-    sched::init_scheduler();
+    sched::init_scheduler(kmain);
     ok!("scheduler initialized");
 
     ok!("kernel initialized");
-    sched::init_switch_to_idle()
+    sched::init_switch()
 }
 
 // FIXME: Initrd memory is not handled by global allocator. This is unsafe.
@@ -100,4 +103,9 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
 
     // SAFETY: Not safe!
     Some(unsafe { Box::from_raw(slice) })
+}
+
+fn kmain() {
+    ok!("enter kmain");
+    test_kthread();
 }

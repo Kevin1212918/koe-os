@@ -129,7 +129,7 @@ pub struct Metadata {
     ///
     /// Used in context switch to switch stack.
     pub(super) rsp: usize,
-    /// Entry point of the thread. This is used during initialization.
+    /// Main function of the thread. This is used during initialization.
     pub(super) main: fn(),
     /// Priority of the thread. Lower value is higher priority.
     pub(super) priority: u8,

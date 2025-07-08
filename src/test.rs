@@ -1,5 +1,10 @@
 use alloc::vec::Vec;
 
+use crate::common::hlt;
+use crate::common::log::ok;
+use crate::sched::thread::KThread;
+use crate::sched::{self, ThreadState};
+
 pub fn test_mem() {
     // FIXME: reorganize test cases
     let mut test = Vec::new();
@@ -37,5 +42,61 @@ pub fn test_mem() {
         for (i, num) in list.iter().enumerate() {
             assert!(*num as usize == i * j);
         }
+    }
+}
+
+pub fn test_kthread() {
+    sched::schedule_kthread(
+        KThread::boxed(task1, 1),
+        ThreadState::Ready,
+    );
+    sched::schedule_kthread(
+        KThread::boxed(task2, 1),
+        ThreadState::Ready,
+    );
+    sched::schedule_kthread(
+        KThread::boxed(task1, 1),
+        ThreadState::Ready,
+    );
+}
+
+fn task1() {
+    ok!("executing task1");
+
+    sched::schedule_kthread(
+        KThread::boxed(task4, 1),
+        ThreadState::Ready,
+    );
+    sched::schedule_kthread(
+        KThread::boxed(task3, 1),
+        ThreadState::Ready,
+    );
+    sched::schedule_kthread(
+        KThread::boxed(task3, 1),
+        ThreadState::Ready,
+    );
+}
+
+fn task3() {
+    ok!("executing task3");
+}
+
+fn task4() {
+    ok!("executing task4");
+    for i in 0..100 {
+        if i % 10 == 0 {
+            ok!("task4: {}th hlt", i);
+        }
+        hlt();
+    }
+}
+
+fn task2() {
+    ok!("executing task2");
+    for i in 0..100 {
+        if i % 10 == 0 {
+            ok!("task2: {}th hlt", i);
+        }
+        hlt();
     }
 }

@@ -13,7 +13,7 @@ use thread::{KThread, THREAD_LINK_OFFSET};
 
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{Link, Linked, LinkedList};
-use crate::common::log::{error, ok};
+use crate::common::log::{error, info, ok};
 use crate::common::{die, hlt};
 use crate::interrupt::InterruptGuard;
 use crate::mem::addr::PageSize;
@@ -22,19 +22,25 @@ use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
 mod switch;
 pub mod thread;
 
-static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
+pub static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
 
-pub fn init_scheduler() {
+/// Initialize scheduler and schedule the main task to be run later.
+pub fn init_scheduler(main: fn()) {
     let mut sched_slot = SCHED.lock();
-    let i1 = KThread::boxed(idle1, 1);
-    let i2 = KThread::boxed(idle2, 1);
     let sched = sched_slot.insert(Scheduler::new());
-    sched.schedule(i1, ThreadState::Ready);
-    sched.schedule(i2, ThreadState::Ready);
+    sched.schedule(
+        KThread::boxed(main, 0),
+        ThreadState::Ready,
+    );
 }
+/// Transfer control from init thread to scheduler.
+///
+/// Enables scheduler and discard the init thread. Rest of the initialization
+/// will be from the main task scheduled in [`init_scheduler`].
+///
 /// # Safety
 /// Should be called at the end of initialization to switch to the idle task.
-pub fn init_switch_to_idle() -> ! {
+pub fn init_switch() -> ! {
     let idle = KThread::boxed(idle, u8::MAX);
     let new_rsp = idle.meta.rsp;
     Box::leak(idle);
@@ -122,6 +128,11 @@ pub fn reschedule(new_state: ThreadState, intrpt: InterruptGuard) {
         return;
     };
 
+    info!(
+        "Rescheduling to Thread {:?}",
+        new_thread.meta.main
+    );
+
     let cur_meta = KThread::cur_meta(&intrpt);
     let cur_idle = KThread::cur_meta(&intrpt).priority == u8::MAX;
     let cpu_id = cur_meta.cpu_id;
@@ -155,6 +166,14 @@ pub fn reschedule(new_state: ThreadState, intrpt: InterruptGuard) {
     // scheduler are locked by before_switch.
     unsafe { switch_to(cur_thread_rsp, new_thread_rsp) };
     drop(intrpt);
+}
+
+pub fn schedule_kthread(thread: Box<KThread>, state: ThreadState) {
+    let mut sched = SCHED.lock();
+    let Some(sched) = sched.as_mut() else {
+        return;
+    };
+    sched.schedule(thread, state);
 }
 
 /// Yield to another thread if available.
@@ -191,19 +210,7 @@ extern "C" fn kthread_entry() -> ! {
 
 fn idle() {
     loop {
-        ok!("idling!");
-        hlt();
-    }
-}
-fn idle1() {
-    loop {
-        ok!("idle1!");
-        hlt();
-    }
-}
-fn idle2() {
-    loop {
-        ok!("idle2!");
+        ok!("Idling...");
         hlt();
     }
 }

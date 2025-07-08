@@ -17,14 +17,23 @@ pub mod mac {
         };
     }
     pub(crate) use error;
+    macro_rules! info {
+        ($($arg:tt)*) => {
+            info(format_args!($($arg)*))
+        };
+    }
+    pub(crate) use info;
 }
 
 pub fn ok(msg: Arguments) { log("OK", Color::Green, msg); }
+pub fn info(msg: Arguments) { log("INFO", Color::Blue, msg); }
 pub fn error(msg: Arguments) { log("ERROR!", Color::Red, msg); }
 pub fn panic(msg: Arguments) { log("PANIC!", Color::Purple, msg); }
 
+
+
 fn log(header: &'static str, color: Color, msg: Arguments) {
-    // log_vga(header, color, msg);
+    log_vga(header, color, msg);
     log_serial(header, color, msg);
 }
 
