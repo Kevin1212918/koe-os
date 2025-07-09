@@ -287,8 +287,6 @@ const SLAB_BUF_SIZE: usize = SLAB_PAGE.usize()
     - size_of::<ll::Link>()
     - SLAB_MAP_LEN * size_of::<usize>();
 
-// TODO: figure out a way to compile time ensure slab alignment.
-
 /// A page-sized slab with metadata.
 ///
 /// Fits into a [`SLAB_PAGE`] and **must** be `SLAB_PAGE` aligned.

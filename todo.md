@@ -1,6 +1,2 @@
-[ ] Initrd
-[ ] Userspace
-    [ ] Implement per-process paging. 
-[ ] ELF loader
-[ ] Scheduler
+[ ] Lock
 [ ] Standard IO
