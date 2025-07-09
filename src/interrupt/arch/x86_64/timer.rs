@@ -6,8 +6,9 @@ use crate::interrupt::IntrptGuard;
 use crate::sched::{self, Scheduler, ThreadState};
 
 const PREEMPT_TICK: u64 = 16;
-pub static mut TICK: u64 = 0;
+static mut TICK: u64 = 0;
 
+pub fn tick() -> u64 { unsafe { TICK } }
 pub fn timer_handler(intrpt: IntrptGuard) {
     let tick;
     // SAFETY: There is only one instance of timer_handler running.

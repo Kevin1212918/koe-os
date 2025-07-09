@@ -1,9 +1,10 @@
-use bitflags::{bitflags, Flags as _};
+use bitflags::{bitflags, bitflags_match, Flags as _};
 use derive_more::derive::{From, Into};
 
 use super::Level;
 use crate::common::{GiB, KiB, MiB};
 use crate::mem::addr::Addr;
+use crate::mem::paging::Attribute;
 use crate::mem::UMASpace;
 
 
@@ -198,4 +199,23 @@ impl Flags: u16 {
     const GLOBAL = 0b1_0000_0000;
 }}
 
-impl Flags {}
+impl From<Attribute> for Flags {
+    fn from(value: Attribute) -> Self {
+        let mut flags = Flags::PRESENT;
+        if value.contains(Attribute::WRITEABLE) {
+            flags |= Flags::WRITEABLE;
+        }
+        if value.contains(Attribute::IS_KERNEL) {
+            flags |= Flags::IS_KERNEL;
+            flags |= Flags::GLOBAL;
+        }
+        if value.intersects(Attribute::UNCACHED | Attribute::UNCACHED_MINUS) {
+            flags |= Flags::NO_CACHE;
+        } else if value.intersects(Attribute::WRITE_THRU) {
+            flags |= Flags::WRITE_THRU;
+        } else {
+            unimplemented!()
+        }
+        flags
+    }
+}

@@ -32,4 +32,4 @@ pub fn disable_interrupt() {
 }
 
 pub use handler::register_handler;
-pub use timer::TICK;
+pub use timer::tick as timer_tick;

@@ -4,7 +4,8 @@ use core::mem::MaybeUninit;
 use core::ptr::slice_from_raw_parts;
 use core::slice;
 
-use super::kthread_entry;
+use crate::sched::kthread_entry;
+
 
 global_asm!(include_str!("switch.S"));
 unsafe extern "C" {
@@ -28,4 +29,25 @@ unsafe extern "C" {
     /// - `new_rsp` should point to top of new `Thread`'s stack.
     /// - Interrupt should be disabled through `IntrptGuard::raw_lock`.
     pub unsafe fn switch_to(old_rsp: *mut usize, new_rsp: usize);
+}
+
+pub fn write_init_stack(stack: &mut [MaybeUninit<usize>]) -> usize {
+    let init_stack = MaybeUninit::new([
+        0, // r15
+        0, // r14
+        0, // r13
+        0, // r12
+        0, // rbx
+        0, // rbp
+        kthread_entry as usize,
+        0, // placeholder for stack alignment.
+    ])
+    .transpose();
+
+    let stack_len = stack.len();
+    if stack_len < init_stack.len() {
+        return 0;
+    }
+    stack[stack_len - init_stack.len()..stack_len].copy_from_slice(&init_stack);
+    init_stack.len()
 }

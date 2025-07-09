@@ -12,8 +12,7 @@ use core::mem::offset_of;
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{Link, Linked, LinkedList};
 use crate::mem::addr::Addr;
-use crate::mem::paging::MapRef;
-use crate::mem::{GlobalAllocator, UserSpace, X86_64MemoryMap};
+use crate::mem::{GlobalAllocator, UserSpace};
 
 pub type Pid = u32;
 

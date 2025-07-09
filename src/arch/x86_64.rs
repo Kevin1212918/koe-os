@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 pub mod boot;
-pub mod interrupt;
+mod gdt;
 pub mod pmio;
 
 #[inline(always)]

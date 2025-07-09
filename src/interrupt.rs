@@ -4,16 +4,18 @@ use core::mem::forget;
 use core::ops::Range;
 use core::sync::atomic::{self, AtomicUsize};
 
+use arch::{disable_interrupt, enable_interrupt};
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use spin::Mutex;
 
-use crate::arch;
-use crate::arch::interrupt::{disable_interrupt, enable_interrupt};
 use crate::common::{InstrPtr, Privilege, StackPtr};
 
-pub fn init() { arch::interrupt::init(); }
+mod arch;
+mod irq;
+
+pub fn init() { arch::init(); }
 
 /// An RAII implementation of reentrant interrupt lock. This structure
 /// guarentees that interrupt is disabled.
@@ -43,23 +45,3 @@ impl Drop for IntrptGuard {
 
 /// Per-CPU tracker for the number of interrupt guard in the kernel.
 static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
-
-
-pub mod irq {
-    use super::IntrptGuard;
-    pub use crate::arch::interrupt::register_handler;
-    use crate::common::{InstrPtr, StackPtr};
-
-    pub type IrqVector = u8;
-    pub struct IrqInfo {
-        pub errno: usize,
-        pub ip: InstrPtr,
-        pub sp: StackPtr,
-    }
-
-    /// Top-half irq handling routine.
-    ///
-    /// This executes in an interrupt disabled context by the kernel irq
-    /// handler.
-    pub type Handler = fn(IrqInfo, &IntrptGuard);
-}

@@ -2,8 +2,7 @@ use alloc::vec::Vec;
 
 use crate::arch::hlt;
 use crate::common::log::ok;
-use crate::sched::thread::KThread;
-use crate::sched::{self, ThreadState};
+use crate::sched::{self, KThread, ThreadState};
 
 pub fn test_mem() {
     // FIXME: reorganize test cases

@@ -16,6 +16,7 @@ use super::kthread_entry;
 use crate::common::ll::{Link, Linked};
 use crate::interrupt::IntrptGuard;
 use crate::mem::addr::PageSize;
+use crate::sched::arch::write_init_stack;
 
 pub(super) const THREAD_LINK_OFFSET: usize = offset_of!(KThread, link);
 pub const THREAD_PAGE_CNT: usize = 2;
@@ -42,11 +43,7 @@ impl KThread {
     /// An inplace initializer for a new thread with the given stack. Note if
     /// the given stack is larger than `KERNEL_STACK_SIZE`, the excess is
     /// not used.
-    pub fn new(
-        init_stack: &[MaybeUninit<usize>],
-        main: fn(),
-        priority: u8,
-    ) -> impl PinInit<Self, Infallible> + '_ {
+    pub fn new(main: fn(), priority: u8) -> impl PinInit<Self, Infallible> {
         unsafe {
             pin_init_from_closure(move |slot: *mut Self| {
                 let link = &raw mut (*slot).link;
@@ -54,12 +51,10 @@ impl KThread {
 
                 let stack = &raw mut (*slot).stack;
                 let stack = stack.as_mut_unchecked();
+                let stack_len = write_init_stack(stack);
+                debug_assert!(stack_len != 0);
 
-                let copy_len = stack.len().min(init_stack.len());
-                stack[KERNEL_STACK_ARRAY_LEN - copy_len..KERNEL_STACK_ARRAY_LEN]
-                    .copy_from_slice(&init_stack[0..copy_len]);
-
-                let rsp = &raw mut (*slot).stack[KERNEL_STACK_ARRAY_LEN - copy_len] as usize;
+                let rsp = &raw mut (*slot).stack[KERNEL_STACK_ARRAY_LEN - stack_len] as usize;
                 let meta = &raw mut (*slot).meta;
                 ptr::write(meta, Metadata {
                     is_usr: false,
@@ -75,8 +70,7 @@ impl KThread {
     }
 
     pub fn boxed(main: fn(), priority: u8) -> Box<Self> {
-        let init_stack = INIT_KTHREAD_STACK.as_uninit_usizes();
-        let new = Box::pin_init(KThread::new(init_stack, main, priority)).unwrap();
+        let new = Box::pin_init(KThread::new(main, priority)).unwrap();
 
         // FIXME: Allow threads to store pinned box.
         // SAFETY:
@@ -134,50 +128,3 @@ pub struct Metadata {
     /// Priority of the thread. Lower value is higher priority.
     pub(super) priority: u8,
 }
-
-
-/// Initial `KThread` stack.
-///
-/// When building a new `KThread`, `INIT_KTHREAD_STACK` will be byte-wise copied
-/// to the new thread's address aligned stack.
-#[repr(C)]
-pub(super) struct InitKThreadStack {
-    r15: u64,
-    r14: u64,
-    r13: u64,
-    r12: u64,
-    rbx: u64,
-    rbp: u64,
-    kthread_entry: extern "C" fn() -> !,
-    null: u64, // This is here to fix kthread_entry alignment.
-}
-impl InitKThreadStack {
-    pub fn as_uninit_usizes(&self) -> &[MaybeUninit<usize>] {
-        let base: *const MaybeUninit<usize> = (self as *const InitKThreadStack).cast();
-        let len = size_of::<InitKThreadStack>() / size_of::<usize>();
-        const _: () = assert!(size_of::<InitKThreadStack>() % size_of::<usize>() == 0);
-        const _: () = assert!(align_of::<InitKThreadStack>() <= align_of::<usize>());
-
-        // SAFETY:
-        // base is not null since it comes from `self`.
-        // base is aligned to usize since align of InitKThreadStack is smaller than that
-        // of usize. the memory range pointed is len * size_of(usize), which
-        // equals size_of(InitKThreadStack).
-        // MaybeUninit is always initialized.
-        // Lifetime inherited from `self` prevents mutation for duration of the
-        // lifetime.
-        // InitiKThreadStack size does not overflow.
-        unsafe { slice::from_raw_parts(base, len) }
-    }
-}
-
-pub(super) static INIT_KTHREAD_STACK: InitKThreadStack = InitKThreadStack {
-    r15: 0,
-    r14: 0,
-    r13: 0,
-    r12: 0,
-    rbx: 0,
-    rbp: 0,
-    kthread_entry,
-    null: 0,
-};

@@ -7,9 +7,9 @@ use core::marker::PhantomPinned;
 use core::mem::{offset_of, MaybeUninit};
 use core::pin::Pin;
 
+use arch::switch_to;
 use pinned_init::InPlaceInit;
-use switch::switch_to;
-use thread::{KThread, THREAD_LINK_OFFSET};
+use thread::THREAD_LINK_OFFSET;
 
 use crate::arch::hlt;
 use crate::common::ll::boxed::BoxLinkedListExt as _;
@@ -19,8 +19,10 @@ use crate::interrupt::IntrptGuard;
 use crate::mem::addr::PageSize;
 use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
 
-mod switch;
-pub mod thread;
+mod arch;
+mod thread;
+
+pub use thread::KThread;
 
 pub static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
 

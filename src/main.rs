@@ -31,7 +31,6 @@ use alloc::boxed::Box;
 use core::ptr::slice_from_raw_parts_mut;
 
 use multiboot2::{BootInformation, BootInformationHeader};
-use sched::thread::KThread;
 use sched::{ThreadState, SCHED};
 use test::test_kthread;
 

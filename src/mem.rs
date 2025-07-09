@@ -8,19 +8,17 @@ use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
 use multiboot2::BootInformation;
-use paging::{Flags, MapRef, MemoryManager, MemoryMap, MMU};
 use virt::KernelImageSpace;
-
 
 pub mod addr;
 mod alloc;
-pub mod paging;
+mod arch;
+mod paging;
 mod phy;
 mod virt;
 
 pub use alloc::{GlobalAllocator, PageAllocator, StaticAllocator};
 
-pub use paging::X86_64MemoryMap;
 pub use phy::UMASpace;
 pub use virt::{PhysicalRemapSpace, UserSpace};
 
