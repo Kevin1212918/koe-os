@@ -1,18 +1,15 @@
 use alloc::boxed::Box;
-use core::alloc::Allocator;
 use core::arch::asm;
 use core::convert::Infallible;
 use core::marker::PhantomPinned;
 use core::mem::{offset_of, MaybeUninit};
 use core::pin::Pin;
-use core::ptr::metadata;
-use core::{ptr, slice, u64};
+use core::{ptr, u64};
 
 use pinned_init::{
-    init_from_closure, pin_data, pin_init, pin_init_from_closure, InPlaceInit as _, PinInit,
+    pin_data, pin_init_from_closure, InPlaceInit as _, PinInit,
 };
 
-use super::kthread_entry;
 use crate::common::ll::{Link, Linked};
 use crate::interrupt::IntrptGuard;
 use crate::mem::addr::PageSize;

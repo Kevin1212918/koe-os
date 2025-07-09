@@ -1,24 +1,16 @@
 //! x86-64 4 level ordinary paging
 
 use alloc::sync::Arc;
-use core::alloc::{Allocator, Layout};
-use core::arch::asm;
-use core::cell::SyncUnsafeCell;
 use core::fmt::Write as _;
-use core::ops::{Deref, Range};
-use core::ptr::{self};
+use core::ops::Deref;
 
-use arraydeque::RangeArgument;
 use bitflags::{bitflags, Flags};
 use derive_more::derive::From;
 
-use super::addr::{self, Addr, Page, PageSize};
+use super::addr::{self, Addr, Page};
 use super::phy::BootMemoryManager;
-use super::virt::{PhysicalRemapSpace, VirtSpace};
-use super::{PageAllocator, UMASpace};
-use crate::mem::addr::{AddrSpace, Allocator as _};
-use crate::mem::kernel_end_vma;
-use crate::mem::virt::KernelImageSpace;
+use super::virt::VirtSpace;
+use super::UMASpace;
 
 pub fn init(bmm: &BootMemoryManager) -> impl MemoryManager { super::arch::init(bmm) }
 

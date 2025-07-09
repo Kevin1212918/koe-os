@@ -1,23 +1,14 @@
 use alloc::alloc::Global;
 use alloc::boxed::Box;
-use core::arch::global_asm;
-use core::cell::{SyncUnsafeCell, UnsafeCell};
-use core::hint::unreachable_unchecked;
-use core::marker::PhantomPinned;
-use core::mem::{offset_of, MaybeUninit};
-use core::pin::Pin;
 
 use arch::switch_to;
-use pinned_init::InPlaceInit;
 use thread::THREAD_LINK_OFFSET;
 
 use crate::arch::hlt;
 use crate::common::ll::boxed::BoxLinkedListExt as _;
-use crate::common::ll::{Link, Linked, LinkedList};
+use crate::common::ll::LinkedList;
 use crate::common::log::{error, info, ok};
 use crate::interrupt::IntrptGuard;
-use crate::mem::addr::PageSize;
-use crate::mem::{PageAllocator, PhysicalRemapSpace, UserSpace};
 
 mod arch;
 mod thread;

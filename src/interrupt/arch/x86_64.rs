@@ -31,5 +31,3 @@ pub fn disable_interrupt() {
     };
 }
 
-pub use handler::register_handler;
-pub use timer::tick as timer_tick;

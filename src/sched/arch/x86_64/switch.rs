@@ -1,8 +1,5 @@
-use core::alloc::Layout;
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
-use core::ptr::slice_from_raw_parts;
-use core::slice;
 
 use crate::sched::kthread_entry;
 

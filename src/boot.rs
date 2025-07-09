@@ -1,4 +1,3 @@
-use core::arch::global_asm;
 mod multiboot2_header {
     use crate::arch;
 

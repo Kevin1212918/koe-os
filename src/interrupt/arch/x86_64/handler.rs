@@ -1,8 +1,7 @@
 use alloc::alloc::Global;
 use alloc::boxed::Box;
-use core::arch::{asm, global_asm};
+use core::arch::asm;
 use core::mem::offset_of;
-use core::ops::DerefMut;
 
 use super::isr::{IntrptStack, IntrptVector, VECTOR_PIC};
 use super::pic::ack;
@@ -11,7 +10,6 @@ use crate::arch::die;
 use crate::common::ll::boxed::BoxLinkedListExt;
 use crate::common::ll::{Link, Linked, LinkedList};
 use crate::common::log::error;
-use crate::drivers::ps2;
 use crate::interrupt::irq::{Handler, IrqInfo, IrqVector};
 use crate::interrupt::IntrptGuard;
 

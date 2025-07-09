@@ -1,4 +1,4 @@
-use bitflags::{bitflags, bitflags_match, Flags as _};
+use bitflags::{bitflags, Flags as _};
 use derive_more::derive::{From, Into};
 
 use super::Level;

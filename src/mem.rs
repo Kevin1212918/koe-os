@@ -1,9 +1,7 @@
-use core::alloc::Layout;
 use core::arch::asm;
 use core::ops::Range;
-use core::ptr;
 
-use addr::{Addr, Allocator, Page, PageRange, PageSize};
+use addr::Addr;
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
@@ -17,12 +15,11 @@ mod paging;
 mod phy;
 mod virt;
 
-pub use alloc::{GlobalAllocator, PageAllocator, StaticAllocator};
+pub use alloc::{GlobalAllocator, PageAllocator};
 
 pub use phy::UMASpace;
 pub use virt::{PhysicalRemapSpace, UserSpace};
 
-use crate::common::log::{self, ok};
 use crate::common::Privilege;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;

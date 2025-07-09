@@ -1,9 +1,7 @@
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use super::pic::ack;
-use crate::common::log::ok;
 use crate::interrupt::IntrptGuard;
-use crate::sched::{self, Scheduler, ThreadState};
+use crate::sched::{self, ThreadState};
 
 const PREEMPT_TICK: u64 = 16;
 static mut TICK: u64 = 0;

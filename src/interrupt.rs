@@ -1,16 +1,9 @@
-use core::arch::asm;
-use core::cell::SyncUnsafeCell;
 use core::mem::forget;
-use core::ops::Range;
 use core::sync::atomic::{self, AtomicUsize};
 
 use arch::{disable_interrupt, enable_interrupt};
 use bitvec::field::BitField;
-use bitvec::order::Lsb0;
-use bitvec::view::BitView;
-use spin::Mutex;
 
-use crate::common::{InstrPtr, Privilege, StackPtr};
 
 mod arch;
 mod irq;
