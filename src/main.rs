@@ -9,7 +9,8 @@
     allocator_api,
     strict_overflow_ops,
     const_alloc_layout,
-    maybe_uninit_uninit_array_transpose
+    maybe_uninit_uninit_array_transpose,
+    slice_ptr_get
 )]
 #![allow(clippy::needless_range_loop, private_interfaces)]
 #![deny(

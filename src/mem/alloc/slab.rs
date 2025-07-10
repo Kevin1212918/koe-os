@@ -7,6 +7,7 @@ use core::mem::{offset_of, transmute, MaybeUninit};
 use core::ptr::NonNull;
 use core::{array, slice};
 
+use bitvec::array::BitArray;
 use bitvec::order::Lsb0;
 use bitvec::slice::BitSlice;
 use bitvec::view::BitView;
@@ -303,8 +304,8 @@ struct Slab<T: Item> {
 #[repr(C)]
 struct UntypedSlab {
     link: ll::Link,
-    /// Bitmap for the slot array. 0 is occupied and 1 is free.
-    bitmap: [u64; SLAB_MAP_LEN],
+    /// Bitmap for the slot array. 0 is free and 1 is occupied.
+    bitmap: BitArray<[u64; SLAB_MAP_LEN]>,
     free_cnt: u16,
     buf: [u8; SLAB_BUF_SIZE],
 }
@@ -312,13 +313,9 @@ impl UntypedSlab {
     fn new(free_cnt: u16) -> impl Init<Self> {
         init!(Self {
             link: ll::Link::new(),
-            bitmap <- pinned_init::zeroed(),
+            bitmap: BitArray::ZERO,
             free_cnt,
             buf <- pinned_init::zeroed(),
-        })
-        .chain(|slab| {
-            slab.bitmap.fill(u64::MAX);
-            Ok(())
         })
     }
 
@@ -359,11 +356,9 @@ impl<T: Item> Slab<T> {
         assert!(buf_start + Self::SLOTS_START + Self::SLOT_SIZE <= SLAB_PAGE.usize());
     };
 
-    fn map(&self) -> &BitSlice<u64, Lsb0> { &self.inner.bitmap.view_bits()[0..Self::SLOTS_LEN] }
+    fn map(&self) -> &BitSlice<u64, Lsb0> { &self.inner.bitmap[0..Self::SLOTS_LEN] }
 
-    fn map_mut(&mut self) -> &mut BitSlice<u64, Lsb0> {
-        &mut self.inner.bitmap.view_bits_mut()[0..Self::SLOTS_LEN]
-    }
+    fn map_mut(&mut self) -> &mut BitSlice<u64, Lsb0> { &mut self.inner.bitmap[0..Self::SLOTS_LEN] }
 
     fn slots(&self) -> &[MaybeUninit<T>] {
         // SAFETY: Self::SLOTS_START is smaller than page size, so the ptr is
@@ -421,10 +416,10 @@ impl<T: Item> Slab<T> {
         // SAFETY: Since free_cnt is not greater or equal to SLOTS_LEN, there
         // must be at least one slot not occupied.
         // let idx = unsafe { map.first_one().unwrap_unchecked() };
-        let idx = map.first_one().unwrap();
+        let idx = map.first_zero().unwrap();
         debug_assert!(idx < Self::SLOTS_LEN);
-        // SAFETY: idx was returned from first_one
-        unsafe { map.replace_unchecked(idx, false) };
+        // SAFETY: idx was returned from first_zero
+        unsafe { map.replace_unchecked(idx, true) };
 
         self.inner.free_cnt -= 1;
         let uninit = &mut self.slots_mut()[idx];
@@ -443,10 +438,10 @@ impl<T: Item> Slab<T> {
         let idx = unsafe { ptr.as_ptr().offset_from(self.slots().as_ptr().cast()) };
         let idx = idx as usize;
 
-        debug_assert!(!self.map()[idx]);
+        debug_assert!(self.map()[idx]);
         // SAFETY: Since ptr is within bound, its offset from beginning of
         // slots should be within bound as well.
-        unsafe { self.map_mut().replace_unchecked(idx, true) };
+        unsafe { self.map_mut().replace_unchecked(idx, false) };
         self.inner.free_cnt += 1;
     }
 
@@ -455,10 +450,8 @@ impl<T: Item> Slab<T> {
     /// # Safety
     /// 'ptr' points to an element in an existing slab.
     unsafe fn from_elem_ptr(ptr: NonNull<T>) -> NonNull<Self> {
-        // FIXME: FIX THIS
-        let offset = (ptr.as_ptr() as usize) % SLAB_PAGE.align();
-        // SAFETY: No slab should be at 0 pointer.
-        unsafe { ptr.byte_sub(offset) }.cast()
+        let ptr = (ptr.as_ptr() as usize) & !(SLAB_PAGE.align() - 1);
+        NonNull::new(ptr as *mut Self).expect("slab pointer should not be 0")
     }
 }
 

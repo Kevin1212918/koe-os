@@ -1,4 +1,3 @@
-
 #[allow(non_upper_case_globals)]
 pub const KiB: usize = 1 << 10;
 #[allow(non_upper_case_globals)]

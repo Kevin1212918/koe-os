@@ -15,7 +15,7 @@ mod paging;
 mod phy;
 mod virt;
 
-pub use alloc::{GlobalAllocator, PageAllocator};
+pub use alloc::{GlobalAllocator, PageAllocator, SlabAllocator};
 
 pub use phy::UMASpace;
 pub use virt::{PhysicalRemapSpace, UserSpace};

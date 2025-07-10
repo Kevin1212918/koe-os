@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
+use core::alloc::{Allocator, Layout};
 
 use crate::arch::hlt;
 use crate::common::log::ok;
+use crate::mem::SlabAllocator;
 use crate::sched::{self, KThread, ThreadState};
 
 pub fn test_mem() {
@@ -41,6 +43,19 @@ pub fn test_mem() {
         for (i, num) in list.iter().enumerate() {
             assert!(*num as usize == i * j);
         }
+    }
+
+    let mut ptrs = Vec::new();
+    let lay = Layout::from_size_align(8, 8).unwrap();
+    for i in 0..1000 {
+        ptrs.push(
+            SlabAllocator
+                .allocate(lay)
+                .expect("alloc should be successful"),
+        );
+    }
+    for p in ptrs {
+        unsafe { SlabAllocator.deallocate(p.as_non_null_ptr(), lay) };
     }
 }
 
