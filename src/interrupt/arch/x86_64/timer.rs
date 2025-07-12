@@ -1,4 +1,3 @@
-
 use super::pic::ack;
 use crate::interrupt::IntrptGuard;
 use crate::sched::{self, ThreadState};
@@ -23,6 +22,6 @@ pub fn timer_handler(intrpt: IntrptGuard) {
         // lock is created when rescheduling.
         //
         // intrpt will be dropped after this returns.
-        sched::reschedule(ThreadState::Ready, intrpt);
+        sched::preempt(intrpt);
     }
 }

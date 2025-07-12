@@ -1,19 +1,25 @@
 use alloc::alloc::Global;
 use alloc::boxed::Box;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use arch::switch_to;
-use thread::THREAD_LINK_OFFSET;
+use atomic::Atomic;
+use bytemuck::NoUninit;
+use hashbrown::HashMap;
+use thread::{Tid, THREAD_LINK_OFFSET};
 
 use crate::arch::hlt;
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::LinkedList;
 use crate::common::log::{error, info, ok};
+use crate::common::StackPtr;
 use crate::interrupt::IntrptGuard;
+use crate::sync::spin;
 
 mod arch;
 mod thread;
 
-pub use thread::KThread;
+pub use thread::KStack;
 
 pub static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
 
@@ -21,58 +27,234 @@ pub static SCHED: spin::Mutex<Option<Scheduler>> = spin::Mutex::new(None);
 pub fn init_scheduler(main: fn()) {
     let mut sched_slot = SCHED.lock();
     let sched = sched_slot.insert(Scheduler::new());
-    sched.schedule(
-        KThread::boxed(main, 0),
-        ThreadState::Ready,
-    );
+    sched.launch_thread(main, 1);
 }
-/// Transfer control from init thread to scheduler.
-///
-/// Enables scheduler and discard the init thread. Rest of the initialization
-/// will be from the main task scheduled in [`init_scheduler`].
-///
-/// # Safety
-/// Should be called at the end of initialization to switch to the idle task.
+
 pub fn init_switch() -> ! {
-    let idle = KThread::boxed(idle, u8::MAX);
-    let new_rsp = idle.meta.rsp;
-    Box::leak(idle);
-    let mut dummy: usize = 0;
-    IntrptGuard::new().leak();
-    SCHED.lock().as_mut().unwrap().is_disabled = false;
-    unsafe { switch_to(&raw mut dummy, new_rsp) };
-    unreachable!()
+    let intrpt = IntrptGuard::new();
+    // Reclaiming the initial preempt guard.
+    drop(unsafe { PreemptGuard::reclaim() });
+    Scheduler::force_switch(Some(intrpt));
 }
 
 /// Per-CPU structure managing currently running threads.
 pub struct Scheduler {
-    ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
-    zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
-    idle: Option<Box<KThread>>,
-    is_disabled: bool,
+    thread_map: HashMap<Tid, Tcb>,
+    dispatchers: [Dispatcher; 1],
 }
 impl Scheduler {
     fn new() -> Self {
-        Scheduler {
-            ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
-            zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
-            idle: None,
-            is_disabled: true,
+        let mut ret = Self {
+            thread_map: HashMap::new(),
+            dispatchers: [Dispatcher::new()],
+        };
+
+        ret.launch_thread(idle, u8::MAX);
+        ret
+    }
+
+    fn launch_thread(&mut self, main: fn(), priority: u8) -> Tid {
+        let thread = KStack::boxed();
+        let tid = thread.tid;
+        let tcb = Tcb {
+            is_usr: false,
+            cpu_id: 0,
+            main,
+            priority,
+            kstack: &raw const *thread,
+            state: Atomic::new(ThreadState::Ready),
+        };
+        let dispatch = &mut self.dispatchers[0];
+        info!("Launch thread {}", tid);
+        debug_assert!(!self.thread_map.contains_key(&tid));
+        // FIXME: This seems to trigger UB in allocator. Use the try_insert version for
+        // now. let (_, tcb) = unsafe {
+        // self.thread_map.insert_unique_unchecked(tid, tcb) };
+        let tcb = self.thread_map.try_insert(tid, tcb).unwrap();
+        dispatch.put(tcb, thread);
+
+        tid
+    }
+
+    /// Create a new thread and schedule it as `ThreadState::Ready`.
+    ///
+    /// Returns the `Tid` to the new thread.
+    pub fn launch(main: fn(), priority: u8) -> Tid {
+        let mut sched = SCHED.lock();
+        let Some(sched) = sched.as_mut() else {
+            // SAFETY: unlock the sched from above.
+            unsafe { SCHED.force_unlock() };
+            panic!("Scheduler is not initialized");
+        };
+
+        let ret = sched.launch_thread(main, priority);
+        ret
+    }
+
+    // TODO: refactor reschedule and force_switch
+
+    /// Yields to a new thread while rescheduling the current thread to
+    /// `new_state`.
+    ///
+    /// This call blocks until the thread is switched back, or never returns if
+    /// `new_state` is [`ThreadState::Zombie`].
+    pub fn reschedule(new_state: ThreadState, intrpt: Option<IntrptGuard>) {
+        if new_state == ThreadState::Running {
+            return;
+        }
+
+        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
+        let sched = spin::MutexGuard::leak(SCHED.lock());
+        let Some(sched) = sched.as_mut() else {
+            // SAFETY: unlock the sched from above.
+            unsafe { SCHED.force_unlock() };
+            error!("Scheduler is not initialized");
+            return;
+        };
+
+        if IntrptGuard::cnt() > 1 || intrpt.is_none() && IntrptGuard::cnt() > 0 {
+            error!("Entering sched::reschedule with untracked interrupt guards.");
+        }
+
+        let dispatch = &mut sched.dispatchers[0];
+
+        let Some(new_thread) = dispatch.next() else {
+            return;
+        };
+        let new_tid = new_thread.tid;
+        let new_tcb = sched.thread_map.get(&new_tid).unwrap();
+
+        debug_assert!(new_tcb.state.load(Ordering::Relaxed) == ThreadState::Ready);
+        new_tcb.state.store(ThreadState::Running, Ordering::Relaxed);
+        let new_stack_ptr = new_thread.sp;
+        // NOTE: New running thread is recovered next time it enters reschedule.
+        Box::leak(new_thread);
+
+
+        let my_tid = KStack::cur_tid();
+        let my_tcb = sched.thread_map.get(&my_tid).unwrap();
+
+        debug_assert!(my_tcb.state.load(Ordering::Relaxed) == ThreadState::Running);
+        my_tcb.state.store(new_state, Ordering::Relaxed);
+        let mut my_thread = unsafe { Box::from_raw(KStack::cur_thread_ptr()) };
+        let my_stack_ptr = &raw mut my_thread.sp;
+        dispatch.put(my_tcb, my_thread);
+
+        info!(
+            "Switch from thread {} to thread {}",
+            my_tid, new_tid
+        );
+        // NOTE: IntrptGuard is reclaimed when exiting switch_to
+        intrpt.unwrap_or_else(|| IntrptGuard::new()).leak();
+
+        // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
+        // scheduler are locked by before_switch.
+        unsafe { switch_to(my_stack_ptr, new_stack_ptr) };
+
+        // SAFETY: reclaiming previously leaked intrpt guard.
+        unsafe { IntrptGuard::reclaim() };
+        // SAFETY: unlock the sched from beginning.
+        unsafe {
+            SCHED.force_unlock();
         }
     }
 
-    fn next_kthread(&mut self) -> Option<Box<KThread>> {
-        self.ready_threads
-            .front_mut()
-            .remove()
-            .or_else(|| self.idle.take())
+    /// Transfer control to a ready thread and leak the current thread.
+    ///
+    /// # Panic
+    /// This will panic if scheduler is not initialized or there is no runnable
+    /// thread.
+    pub fn force_switch(intrpt: Option<IntrptGuard>) -> ! {
+        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
+        let sched = spin::MutexGuard::leak(SCHED.lock());
+        let Some(sched) = sched.as_mut() else {
+            // SAFETY: unlock the sched from above.
+            unsafe { SCHED.force_unlock() };
+            panic!("Scheduler is not initialized");
+        };
+
+        let dispatch = &mut sched.dispatchers[0];
+
+        let Some(new_thread) = dispatch.next() else {
+            panic!("No runnable thread found after init.");
+        };
+        let new_tid = new_thread.tid;
+        let new_tcb = sched.thread_map.get(&new_tid).unwrap();
+
+        debug_assert!(new_tcb.state.load(Ordering::Relaxed) == ThreadState::Ready);
+        new_tcb.state.store(ThreadState::Running, Ordering::Relaxed);
+        let new_stack_ptr = new_thread.sp;
+        // NOTE: New running thread is recovered next time it enters reschedule.
+        Box::leak(new_thread);
+
+        info!("Force switch to thread {}", new_tid);
+
+        let mut dummy: StackPtr = 0;
+        // NOTE: IntrptGuard is reclaimed when exiting switch_to
+        intrpt.unwrap_or_else(|| IntrptGuard::new()).leak();
+
+        // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
+        // scheduler are locked by before_switch.
+        unsafe { switch_to(&raw mut dummy, new_stack_ptr) };
+        unreachable!()
+    }
+}
+
+/// Entry point for a new `KThread`.
+extern "C" fn kthread_entry() -> ! {
+    if IntrptGuard::cnt() != 1 {
+        error!("Exiting switch_to with incorrect count of interrupt guard.");
+    }
+    // SAFETY: reclaiming previously leaked intrpt guard.
+    let intrpt = unsafe { IntrptGuard::reclaim() };
+    // SAFETY: sched is locked from switch_to from beginning.
+    let sched = unsafe {
+        SCHED
+            .as_mut_ptr()
+            .as_mut_unchecked()
+            .as_mut()
+            .unwrap_unchecked()
+    };
+    let tid = KStack::cur_tid();
+    let main = sched.thread_map.get(&tid).unwrap().main;
+
+    drop(sched);
+    // SAFETY: the mutable reference is dropped. Unlocking the sched lock from
+    // before switch_to.
+    unsafe { SCHED.force_unlock() };
+    drop(intrpt);
+
+    debug_assert!(IntrptGuard::cnt() == 0);
+    main();
+
+    // Exit by scheduling as zombie.
+    Scheduler::reschedule(ThreadState::Zombie, None);
+
+    // SAFETY: rescheduling to zombie will stop the thread from being switched to
+    // again.
+    unreachable!()
+}
+
+
+struct Dispatcher {
+    ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<KStack>>,
+    zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<KStack>>,
+    idle: Option<Box<KStack>>,
+}
+impl Dispatcher {
+    fn new() -> Self {
+        Self {
+            ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KStack>>::new_in(Global),
+            zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KStack>>::new_in(Global),
+            idle: None,
+        }
     }
 
     /// Return `None` if scheduler does not keep track of the state.
     fn queue_mut(
         &mut self,
         state: ThreadState,
-    ) -> Option<&mut LinkedList<THREAD_LINK_OFFSET, Box<KThread>>> {
+    ) -> Option<&mut LinkedList<THREAD_LINK_OFFSET, Box<KStack>>> {
         match state {
             ThreadState::Ready => Some(&mut self.ready_threads),
             ThreadState::Zombie => Some(&mut self.zombie_threads),
@@ -81,117 +263,64 @@ impl Scheduler {
         }
     }
 
-    /// UB when scheduling to running state.
-    fn schedule(&mut self, thread: Box<KThread>, state: ThreadState) {
-        debug_assert!(!matches!(state, ThreadState::Running));
-        // Disable interrupt on current core.
-        let _intrpt = IntrptGuard::new();
-        // Lock scheduler for the current core.
-        if let Some(que) = self.queue_mut(state) {
+    /// Take the next ready thread.
+    fn next(&mut self) -> Option<Box<KStack>> {
+        self.ready_threads
+            .front_mut()
+            .remove()
+            .or_else(|| self.idle.take())
+    }
+
+    /// Puts the thread on a queue.
+    ///
+    /// If the thread is an idle thread, it is put in the idle slot.
+    fn put(&mut self, tcb: &Tcb, thread: Box<KStack>) {
+        if tcb.priority != u8::MAX {
+            let que = self.queue_mut(tcb.state.load(Ordering::Relaxed)).unwrap();
             que.push_back(thread);
+            return;
         }
+        if self.idle.is_some() {
+            error!("Parking an idle thread when one exists.");
+            return;
+        }
+        self.idle.insert(thread);
     }
 }
 
-/// Yields to a new thread while rescheduling the current thread to `new_state`.
+/// An RAII implementation of reentrant preempt lock. This structure
+/// guarentees that no preemption will occur on the CPU.
+pub struct PreemptGuard();
+impl PreemptGuard {
+    pub fn new() -> Self {
+        PREEMPT_GUARD_CNT.fetch_add(1, atomic::Ordering::Relaxed);
+        Self()
+    }
+    /// # Safety
+    /// `reclaim` should always correspond to a previously leaked guard.
+    pub unsafe fn reclaim() -> Self { Self() }
+
+    pub fn leak(self) { core::mem::forget(self) }
+    pub fn cnt() -> usize { PREEMPT_GUARD_CNT.load(atomic::Ordering::Relaxed) }
+}
+
+impl Drop for PreemptGuard {
+    fn drop(&mut self) { PREEMPT_GUARD_CNT.fetch_sub(1, atomic::Ordering::Relaxed); }
+}
+
+/// Per-CPU tracker for the number of preempt guard in the kernel.
 ///
-/// This call blocks until the thread is switched back, or never returns if
-/// `new_state` is [`ThreadState::Zombie`].
-pub fn reschedule(new_state: ThreadState, intrpt: IntrptGuard) {
-    if matches!(new_state, ThreadState::Running) {
-        return;
+/// Note preemption starts enabled.
+static PREEMPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(1);
+
+/// Reschedules to another thread if preemption is enabled.
+pub fn preempt(intrpt: IntrptGuard) {
+    if PreemptGuard::cnt() == 0 {
+        Scheduler::reschedule(ThreadState::Ready, Some(intrpt));
     }
-    if IntrptGuard::cnt() != 1 {
-        error!("Entering sched::reschedule with more than 1 interrupt guard live.");
-    }
-
-    // Lock scheduler for the current core.
-    let mut sched_lock = SCHED.lock();
-    let Some(sched) = sched_lock.as_mut() else {
-        return;
-    };
-
-    if sched.is_disabled {
-        return;
-    }
-
-    // SAFETY: The access does not overlap with other access since we are holding
-    // scheduler lock.
-    let Some(mut new_thread) = sched.next_kthread() else {
-        return;
-    };
-
-    info!(
-        "Rescheduling to Thread {:?}",
-        new_thread.meta.main
-    );
-
-    let cur_meta = KThread::cur_meta(&intrpt);
-    let cur_idle = KThread::cur_meta(&intrpt).priority == u8::MAX;
-    let cpu_id = cur_meta.cpu_id;
-    // FIXME: This is likely to still cause UB.
-    // Note the cast here is appropriate because outside scheduler, there is no
-    // reference to rsp.
-    let cur_thread_rsp = (&raw const cur_meta.rsp).cast_mut();
-    drop(cur_meta);
-
-    new_thread.meta.cpu_id = cpu_id;
-    let new_thread_rsp = new_thread.meta.rsp;
-
-    let cur_thread = KThread::cur_thread_ptr();
-    // SAFETY: All threads were allocated on stack.
-    let cur_thread = unsafe { Box::from_raw(cur_thread) };
-
-    if cur_idle {
-        debug_assert!(sched.idle.is_none());
-        sched.idle = Some(cur_thread);
-    } else {
-        sched.queue_mut(new_state).unwrap().push_back(cur_thread);
-    }
-
-    // We will get the memory back when new thread schedules itself back.
-    Box::leak(new_thread);
-    drop(sched_lock);
-
-    // Note per-CPU structures are no longer for the current thread after switch_to.
-
-    // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
-    // scheduler are locked by before_switch.
-    unsafe { switch_to(cur_thread_rsp, new_thread_rsp) };
-    drop(intrpt);
 }
 
-pub fn schedule_kthread(thread: Box<KThread>, state: ThreadState) {
-    let mut sched = SCHED.lock();
-    let Some(sched) = sched.as_mut() else {
-        return;
-    };
-    sched.schedule(thread, state);
-}
 
-/// Yield to another thread if available.
-pub fn yield_kthread() { reschedule(ThreadState::Ready, IntrptGuard::new()); }
-
-/// Entry point for a new `KThread`.
-extern "C" fn kthread_entry() -> ! {
-    // SAFETY: Jumping from switch_to.
-    let intrpt = unsafe { IntrptGuard::reclaim() };
-    if IntrptGuard::cnt() != 1 {
-        error!("exiting switch_to with more than 1 interrupt guard live.");
-    }
-    let main = KThread::cur_meta(&intrpt).main;
-    drop(intrpt);
-
-    debug_assert!(IntrptGuard::cnt() == 0);
-    main();
-
-    // Exit by scheduling as zombie.
-    reschedule(ThreadState::Zombie, IntrptGuard::new());
-
-    // SAFETY: rescheduling to zombie will stop the thread from being switched to
-    // again.
-    unreachable!()
-}
 
 fn idle() {
     loop {
@@ -200,8 +329,28 @@ fn idle() {
     }
 }
 
+unsafe impl NoUninit for ThreadState {}
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
     Running,
     Ready,
     Zombie,
+}
+
+unsafe impl Send for Tcb {}
+#[derive(Debug)]
+struct Tcb {
+    /// Is the thread backed by a userspace.
+    pub is_usr: bool,
+    /// CPU ID
+    pub cpu_id: u8,
+    /// Main function of the thread. This is used during initialization.
+    main: fn(),
+    /// Priority of the thread. Lower value is higher priority.
+    priority: u8,
+    /// Pointer to `KStack`
+    kstack: *const KStack,
+    /// Current execution state
+    state: Atomic<ThreadState>,
 }

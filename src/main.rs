@@ -47,6 +47,7 @@ mod interrupt;
 mod io;
 mod mem;
 mod sched;
+mod sync;
 mod test;
 mod usr;
 

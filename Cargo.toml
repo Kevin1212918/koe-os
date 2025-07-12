@@ -10,14 +10,16 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-arraydeque = { version = "0.5.1", default-features = false }
 arrayvec = { version = "0.7.6", default-features = false }
+atomic = { version = "0.6.1", default-features = false }
 bitflags = "2.8.0"
 bitvec = { version = "1.0.1", default-features = false }
+bytemuck = "1.23.1"
 derive_more = { version = "1.0.0", default-features = false, features = [
     "full",
 ] }
 goblin = { version = "0.9.3", default-features = false, features = ["elf64"] }
+hashbrown = { version = "0.15.4", default-features = false, features = ["default-hasher"] }
 intrusive-collections = "0.9.7"
 multiboot2 = { version = "0.23.0", default-features = false }
 no_std_io = { version = "0.6.0", features = ["alloc"] }

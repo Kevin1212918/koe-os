@@ -1,6 +1,7 @@
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
 
+use crate::common::StackPtr;
 use crate::sched::kthread_entry;
 
 
@@ -23,9 +24,10 @@ unsafe extern "C" {
     /// # Safety
     /// - `old_rsp` should point to the currently executing `Thread`'s `rsp`
     ///   field.
+    /// - `old_rsp` should be valid for write.
     /// - `new_rsp` should point to top of new `Thread`'s stack.
     /// - Interrupt should be disabled through `IntrptGuard::raw_lock`.
-    pub unsafe fn switch_to(old_rsp: *mut usize, new_rsp: usize);
+    pub unsafe fn switch_to(old_rsp: *mut StackPtr, new_rsp: StackPtr);
 }
 
 pub fn write_init_stack(stack: &mut [MaybeUninit<usize>]) -> usize {

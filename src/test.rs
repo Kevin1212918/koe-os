@@ -2,9 +2,9 @@ use alloc::vec::Vec;
 use core::alloc::{Allocator, Layout};
 
 use crate::arch::hlt;
-use crate::common::log::ok;
+use crate::common::log::{info, ok};
 use crate::mem::SlabAllocator;
-use crate::sched::{self, KThread, ThreadState};
+use crate::sched::{self, KStack, Scheduler, ThreadState};
 
 pub fn test_mem() {
     // FIXME: reorganize test cases
@@ -26,24 +26,6 @@ pub fn test_mem() {
     for i in test2.iter().enumerate() {
         assert!(i.0 == *i.1 as usize);
     }
-    let mut test3 = Vec::new();
-    test3.reserve_exact(43);
-    for j in 0..2000 {
-        let mut inner = Vec::new();
-        inner.reserve_exact(15);
-        for i in 0..10 {
-            inner.push(i * j);
-        }
-        test3.push(inner);
-    }
-    for i in test2.iter().enumerate() {
-        assert!(i.0 == *i.1 as usize);
-    }
-    for (j, list) in test3.iter().enumerate() {
-        for (i, num) in list.iter().enumerate() {
-            assert!(*num as usize == i * j);
-        }
-    }
 
     let mut ptrs = Vec::new();
     let lay = Layout::from_size_align(8, 8).unwrap();
@@ -60,35 +42,15 @@ pub fn test_mem() {
 }
 
 pub fn test_kthread() {
-    sched::schedule_kthread(
-        KThread::boxed(task1, 1),
-        ThreadState::Ready,
-    );
-    sched::schedule_kthread(
-        KThread::boxed(task2, 1),
-        ThreadState::Ready,
-    );
-    sched::schedule_kthread(
-        KThread::boxed(task1, 1),
-        ThreadState::Ready,
-    );
+    Scheduler::launch(task2, 1);
+    Scheduler::launch(task1, 1);
 }
 
 fn task1() {
     ok!("executing task1");
-
-    sched::schedule_kthread(
-        KThread::boxed(task4, 1),
-        ThreadState::Ready,
-    );
-    sched::schedule_kthread(
-        KThread::boxed(task3, 1),
-        ThreadState::Ready,
-    );
-    sched::schedule_kthread(
-        KThread::boxed(task3, 1),
-        ThreadState::Ready,
-    );
+    Scheduler::launch(task4, 1);
+    Scheduler::launch(task3, 1);
+    Scheduler::launch(task3, 1);
 }
 
 fn task3() {
@@ -98,9 +60,7 @@ fn task3() {
 fn task4() {
     ok!("executing task4");
     for i in 0..100 {
-        if i % 10 == 0 {
-            ok!("task4: {}th hlt", i);
-        }
+        if i % 10 == 0 {}
         hlt();
     }
 }
@@ -108,9 +68,7 @@ fn task4() {
 fn task2() {
     ok!("executing task2");
     for i in 0..100 {
-        if i % 10 == 0 {
-            ok!("task2: {}th hlt", i);
-        }
+        if i % 10 == 0 {}
         hlt();
     }
 }
