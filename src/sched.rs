@@ -77,10 +77,9 @@ impl Scheduler {
     ///
     /// Returns the `Tid` to the new thread.
     pub fn launch(main: fn(), priority: u8) -> Tid {
+        let preempt = PreemptGuard::new();
         let mut sched = SCHED.lock();
         let Some(sched) = sched.as_mut() else {
-            // SAFETY: unlock the sched from above.
-            unsafe { SCHED.force_unlock() };
             panic!("Scheduler is not initialized");
         };
 
@@ -99,19 +98,17 @@ impl Scheduler {
         if new_state == ThreadState::Running {
             return;
         }
+        if IntrptGuard::cnt() > 1 || intrpt.is_none() && IntrptGuard::cnt() > 0 {
+            error!("Entering sched::reschedule with untracked interrupt guards.");
+        }
+        let intrpt = intrpt.unwrap_or_else(|| IntrptGuard::new());
 
-        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
-        let sched = spin::MutexGuard::leak(SCHED.lock());
-        let Some(sched) = sched.as_mut() else {
-            // SAFETY: unlock the sched from above.
-            unsafe { SCHED.force_unlock() };
+        let mut sched_lock = SCHED.lock();
+        let Some(sched) = sched_lock.as_mut() else {
             error!("Scheduler is not initialized");
             return;
         };
 
-        if IntrptGuard::cnt() > 1 || intrpt.is_none() && IntrptGuard::cnt() > 0 {
-            error!("Entering sched::reschedule with untracked interrupt guards.");
-        }
 
         let dispatch = &mut sched.dispatchers[0];
 
@@ -137,12 +134,14 @@ impl Scheduler {
         let my_stack_ptr = &raw mut my_thread.sp;
         dispatch.put(my_tcb, my_thread);
 
+        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
+        spin::MutexGuard::leak(sched_lock);
+        // NOTE: IntrptGuard is reclaimed when exiting switch_to
+        intrpt.leak();
         info!(
             "Switch from thread {} to thread {}",
             my_tid, new_tid
         );
-        // NOTE: IntrptGuard is reclaimed when exiting switch_to
-        intrpt.unwrap_or_else(|| IntrptGuard::new()).leak();
 
         // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
         // scheduler are locked by before_switch.
@@ -162,18 +161,17 @@ impl Scheduler {
     /// This will panic if scheduler is not initialized or there is no runnable
     /// thread.
     pub fn force_switch(intrpt: Option<IntrptGuard>) -> ! {
-        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
-        let sched = spin::MutexGuard::leak(SCHED.lock());
-        let Some(sched) = sched.as_mut() else {
-            // SAFETY: unlock the sched from above.
-            unsafe { SCHED.force_unlock() };
+        // NOTE: IntrptGuard is reclaimed when exiting switch_to
+        let intrpt = intrpt.unwrap_or_else(|| IntrptGuard::new());
+
+        let mut sched_lock = SCHED.lock();
+        let Some(sched) = sched_lock.as_mut() else {
             panic!("Scheduler is not initialized");
         };
 
         let dispatch = &mut sched.dispatchers[0];
 
         let Some(new_thread) = dispatch.next() else {
-            unsafe { SCHED.force_unlock() };
             panic!("No runnable thread found after init.");
         };
         let new_tid = new_thread.tid;
@@ -188,8 +186,10 @@ impl Scheduler {
         info!("Force switch to thread {}", new_tid);
 
         let mut dummy: StackPtr = 0;
+        // NOTE: Scheduler lock is reclaimed when exiting switch_to.
+        spin::MutexGuard::leak(sched_lock);
         // NOTE: IntrptGuard is reclaimed when exiting switch_to
-        intrpt.unwrap_or_else(|| IntrptGuard::new()).leak();
+        intrpt.leak();
 
         // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
         // scheduler are locked by before_switch.
