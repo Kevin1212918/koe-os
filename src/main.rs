@@ -56,6 +56,8 @@ mod usr;
 #[allow(clippy::missing_panics_doc)]
 /// Kernel entry point.
 pub extern "C" fn kentry(mbi_ptr: u32) -> ! {
+    arch::init();
+
     serial::init();
     ok!("serial ports initialzed");
 

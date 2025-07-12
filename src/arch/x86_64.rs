@@ -6,6 +6,8 @@ pub mod boot;
 mod gdt;
 pub mod pmio;
 
+pub fn init() { gdt::init(); }
+
 #[inline(always)]
 pub fn die() -> ! {
     // SAFETY: hlt is safe
