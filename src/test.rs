@@ -44,6 +44,7 @@ pub fn test_mem() {
 pub fn test_kthread() {
     Scheduler::launch(task2, 1);
     Scheduler::launch(task1, 1);
+    Scheduler::launch(task1, 1);
 }
 
 fn task1() {
@@ -51,6 +52,7 @@ fn task1() {
     Scheduler::launch(task4, 1);
     Scheduler::launch(task3, 1);
     Scheduler::launch(task3, 1);
+    Scheduler::launch(task2, 1);
 }
 
 fn task3() {
@@ -59,7 +61,7 @@ fn task3() {
 
 fn task4() {
     ok!("executing task4");
-    for i in 0..100 {
+    for i in 0..50 {
         if i % 10 == 0 {}
         hlt();
     }
@@ -67,7 +69,7 @@ fn task4() {
 
 fn task2() {
     ok!("executing task2");
-    for i in 0..100 {
+    for i in 0..50 {
         if i % 10 == 0 {}
         hlt();
     }

@@ -31,6 +31,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::ptr::slice_from_raw_parts_mut;
 
+use arch::die;
 use multiboot2::{BootInformation, BootInformationHeader};
 use test::test_kthread;
 
@@ -65,7 +66,7 @@ pub extern "C" fn kentry(mbi_ptr: u32) -> ! {
     ok!("boot info found");
 
     mem::init(boot_info);
-    test::test_mem();
+    // test::test_mem();
     ok!("mem initalized");
 
     // Reload BootInformation using virtual address.
@@ -106,6 +107,6 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
 }
 
 fn kmain() {
-    ok!("enter kmain");
+    ok!("Enter kmain");
     test_kthread();
 }

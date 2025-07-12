@@ -67,10 +67,7 @@ impl Scheduler {
         let dispatch = &mut self.dispatchers[0];
         info!("Launch thread {}", tid);
         debug_assert!(!self.thread_map.contains_key(&tid));
-        // FIXME: This seems to trigger UB in allocator. Use the try_insert version for
-        // now. let (_, tcb) = unsafe {
-        // self.thread_map.insert_unique_unchecked(tid, tcb) };
-        let tcb = self.thread_map.try_insert(tid, tcb).unwrap();
+        let (_, tcb) = unsafe { self.thread_map.insert_unique_unchecked(tid, tcb) };
         dispatch.put(tcb, thread);
 
         tid
@@ -176,6 +173,7 @@ impl Scheduler {
         let dispatch = &mut sched.dispatchers[0];
 
         let Some(new_thread) = dispatch.next() else {
+            unsafe { SCHED.force_unlock() };
             panic!("No runnable thread found after init.");
         };
         let new_tid = new_thread.tid;

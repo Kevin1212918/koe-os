@@ -2,6 +2,7 @@ use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
 use super::paging::MemoryManager;
+use crate::common::log::info;
 
 mod page;
 mod slab;
@@ -29,15 +30,25 @@ unsafe impl Allocator for StaticAllocator {
 pub struct GlobalAllocator;
 unsafe impl Allocator for GlobalAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if layout.pad_to_align().size() <= SlabAllocator::MAX_SIZE {
+        info!(
+            "Allocating for size: {:#x}, align: {:#x}",
+            layout.size(),
+            layout.align()
+        );
+        let layout = layout.pad_to_align();
+        let res = if layout.size() <= SlabAllocator::MAX_SIZE {
             SlabAllocator.allocate(layout)
         } else {
             PageAllocator.allocate(layout)
-        }
+        };
+        info!("Allocated {:?}", res.unwrap());
+        res
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        if layout.pad_to_align().size() <= SlabAllocator::MAX_SIZE {
+        info!("Deallocating {:?}", ptr);
+        let layout = layout.pad_to_align();
+        if layout.size() <= SlabAllocator::MAX_SIZE {
             unsafe { SlabAllocator.deallocate(ptr, layout) }
         } else {
             unsafe { PageAllocator.deallocate(ptr, layout) }

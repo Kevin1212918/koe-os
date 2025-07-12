@@ -20,7 +20,7 @@ use crate::mem::addr::PageSize;
 use crate::sched::arch::write_init_stack;
 
 pub(super) const THREAD_LINK_OFFSET: usize = offset_of!(KStack, link);
-pub const THREAD_PAGE_CNT: usize = 2;
+pub const THREAD_PAGE_CNT: usize = 4;
 pub const THREAD_SIZE: usize = THREAD_PAGE_CNT * PageSize::MIN.usize();
 pub const KERNEL_STACK_SIZE: usize =
     THREAD_SIZE - size_of::<Link>() - size_of::<Tid>() - size_of::<StackPtr>();
@@ -32,7 +32,7 @@ const _: () = assert!(align_of::<KStack>() == THREAD_SIZE);
 
 unsafe impl Linked<THREAD_LINK_OFFSET> for KStack {}
 #[pin_data]
-#[repr(C, align(8192))]
+#[repr(C, align(16384))]
 pub struct KStack {
     #[pin]
     _pin: PhantomPinned,
