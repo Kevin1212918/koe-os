@@ -1,6 +1,8 @@
 use core::arch::asm;
+use core::sync::atomic::Ordering;
 
 use crate::common::StackPtr;
+use crate::interrupt::IntrptGuard;
 
 pub mod boot;
 mod gdt;
@@ -29,3 +31,5 @@ pub fn stack_ptr() -> StackPtr {
     debug_assert!(stack_ptr != 0);
     stack_ptr
 }
+
+pub use gdt::set_kernel_entry_stack;

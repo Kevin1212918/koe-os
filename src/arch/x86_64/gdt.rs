@@ -1,12 +1,15 @@
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
+use core::sync::atomic::Ordering;
 
+use atomic::Atomic;
 use bitvec::field::BitField as _;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView as _;
 
-use crate::common::Privilege;
+use crate::common::{Privilege, StackPtr};
+use crate::interrupt::IntrptGuard;
 
 pub fn init() {
     static mut GDT: Gdt = Gdt([const { SegmentDesc::invalid() }; Gdt::LEN]);
@@ -36,6 +39,8 @@ pub fn init() {
     };
 }
 
+#[no_mangle]
+static KERNEL_ENTRY_STACK_PTR: Atomic<StackPtr> = Atomic::new(0);
 static TSS: SyncUnsafeCell<Tss> = const {
     let mut arr = [0; 26];
     arr[0] = size_of::<Tss>() as u32;
@@ -43,6 +48,36 @@ static TSS: SyncUnsafeCell<Tss> = const {
 };
 #[repr(C)]
 struct Tss([u32; 26]);
+impl Tss {
+    pub fn set_kernel_entry_stack(&mut self, sp: StackPtr, intrpt: &IntrptGuard) {
+        // Truncating cast
+        let sp_low = sp as u32;
+        let sp_hi = (sp >> 32) as u32;
+
+        self.0[1] = sp_low;
+        self.0[2] = sp_hi;
+    }
+}
+
+/// Sets the user-to-kernel interrupt stack.
+///
+/// Interrupt service routine will adopt this stack when trapping from user to
+/// kernel.
+///
+/// # Safety
+/// - Caller should synchronize the calls externally.
+/// - `sp` should point to a valid stack to be used for ISR.
+pub unsafe fn set_kernel_entry_stack(sp: StackPtr, intrpt: Option<&IntrptGuard>) {
+    let mut guard = None;
+    let guard_ref = intrpt.unwrap_or_else(|| {
+        guard = Some(IntrptGuard::new());
+        // SAFETY: guard is initialized above.
+        unsafe { guard.as_ref().unwrap_unchecked() }
+    });
+    // SAFETY: Caller synchronizes the call.
+    unsafe { TSS.get().as_mut_unchecked() }.set_kernel_entry_stack(sp, guard_ref);
+    KERNEL_ENTRY_STACK_PTR.store(sp, Ordering::Relaxed);
+}
 
 #[repr(C, packed(2))]
 struct Gdtr {

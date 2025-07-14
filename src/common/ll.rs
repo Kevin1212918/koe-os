@@ -22,6 +22,55 @@ pub type Link = linked_list::Link;
 pub trait LinkedPtr<const LINK_OFFSET: usize> {
     type DefaultAdapter: Adapter;
 }
+pub struct LinkedPtrAdapter<const LINK_OFFSET: usize, P, A>
+where
+    P: LinkedPtr<LINK_OFFSET>,
+    A: Allocator + Clone,
+{
+    link_ops: linked_list::LinkOps,
+    pointer_ops: LinkedPtrOps<LINK_OFFSET, P, A>,
+}
+unsafe impl<const LINK_OFFSET: usize, P, A> Adapter for LinkedPtrAdapter<LINK_OFFSET, P, A>
+where
+    P: LinkedPtr<LINK_OFFSET>,
+    A: Allocator + Clone,
+    LinkedPtrOps<LINK_OFFSET, P, A>: PointerOps,
+    <LinkedPtrOps<LINK_OFFSET, P, A> as PointerOps>::Value: Sized,
+{
+    type LinkOps = linked_list::LinkOps;
+    type PointerOps = LinkedPtrOps<LINK_OFFSET, P, A>;
+
+    unsafe fn get_value(
+        &self,
+        link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
+    ) -> *const <Self::PointerOps as PointerOps>::Value {
+        // SAFETY: LINK_OFFSET should be the offset.
+        unsafe { link.byte_sub(LINK_OFFSET).as_ptr().cast_const().cast() }
+    }
+    unsafe fn get_link(
+        &self,
+        value: *const <Self::PointerOps as PointerOps>::Value,
+    ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
+        // SAFETY: LINK_OFFSET should be the offset.
+        unsafe { NonNull::new_unchecked(value.byte_add(LINK_OFFSET).cast_mut().cast()) }
+    }
+
+    fn link_ops(&self) -> &Self::LinkOps { &self.link_ops }
+
+    fn link_ops_mut(&mut self) -> &mut Self::LinkOps { &mut self.link_ops }
+
+    fn pointer_ops(&self) -> &Self::PointerOps { &self.pointer_ops }
+}
+
+pub struct LinkedPtrOps<const LINK_OFFSET: usize, P, A>
+where
+    P: LinkedPtr<LINK_OFFSET>,
+    A: Allocator + Clone,
+{
+    _phantom: PhantomData<P>,
+    alloc: A,
+}
+
 
 pub type LinkedList<const LINK_OFFSET: usize, T: LinkedPtr<LINK_OFFSET>> =
     linked_list::LinkedList<T::DefaultAdapter>;
@@ -29,19 +78,24 @@ pub type LinkedList<const LINK_OFFSET: usize, T: LinkedPtr<LINK_OFFSET>> =
 pub type Cursor<'a, const LINK_OFFSET: usize, T: LinkedPtr<LINK_OFFSET>> =
     linked_list::Cursor<'a, T::DefaultAdapter>;
 
+
 pub mod boxed {
     use super::*;
-
+    impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone>
+        LinkedPtr<LINK_OFFSET> for Box<T, A>
+    {
+        type DefaultAdapter = LinkedPtrAdapter<LINK_OFFSET, Box<T, A>, A>;
+    }
     pub trait BoxLinkedListExt<A: Allocator + Clone> {
         fn new_in(alloc: A) -> Self;
     }
     impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> BoxLinkedListExt<A>
-        for linked_list::LinkedList<BoxAdapter<LINK_OFFSET, T, A>>
+        for linked_list::LinkedList<LinkedPtrAdapter<LINK_OFFSET, Box<T, A>, A>>
     {
         fn new_in(alloc: A) -> Self {
-            let adapter = BoxAdapter {
+            let adapter = LinkedPtrAdapter {
                 link_ops: linked_list::LinkOps,
-                pointer_ops: BoxPointerOps {
+                pointer_ops: LinkedPtrOps {
                     alloc,
                     _phantom: PhantomData,
                 },
@@ -49,54 +103,12 @@ pub mod boxed {
             Self::new(adapter)
         }
     }
-
-    impl<const LINK_OFFSET: usize, T, A> LinkedPtr<LINK_OFFSET> for Box<T, A>
+    unsafe impl<const LINK_OFFSET: usize, T, A: Allocator + Clone> PointerOps
+        for LinkedPtrOps<LINK_OFFSET, Box<T, A>, A>
     where
         T: Linked<LINK_OFFSET>,
         A: Allocator + Clone,
     {
-        type DefaultAdapter = BoxAdapter<LINK_OFFSET, T, A>;
-    }
-
-    pub struct BoxAdapter<const LINK_OFFSET: usize, T, A: Allocator + Clone> {
-        link_ops: linked_list::LinkOps,
-        pointer_ops: BoxPointerOps<T, A>,
-    }
-    pub struct BoxPointerOps<T, A: Allocator + Clone> {
-        alloc: A,
-        _phantom: PhantomData<Box<T, A>>,
-    }
-    unsafe impl<const LINK_OFFSET: usize, T, A> Adapter for BoxAdapter<LINK_OFFSET, T, A>
-    where
-        T: Linked<LINK_OFFSET>,
-        A: Allocator + Clone,
-    {
-        type LinkOps = linked_list::LinkOps;
-        type PointerOps = BoxPointerOps<T, A>;
-
-        unsafe fn get_value(
-            &self,
-            link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
-        ) -> *const <Self::PointerOps as PointerOps>::Value {
-            // SAFETY: LINK_OFFSET should be the offset.
-            unsafe { link.byte_sub(LINK_OFFSET).as_ptr().cast_const().cast() }
-        }
-
-        unsafe fn get_link(
-            &self,
-            value: *const <Self::PointerOps as PointerOps>::Value,
-        ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
-            // SAFETY: LINK_OFFSET should be the offset.
-            unsafe { NonNull::new_unchecked(value.byte_add(LINK_OFFSET).cast_mut().cast()) }
-        }
-
-        fn link_ops(&self) -> &Self::LinkOps { &self.link_ops }
-
-        fn link_ops_mut(&mut self) -> &mut Self::LinkOps { &mut self.link_ops }
-
-        fn pointer_ops(&self) -> &Self::PointerOps { &self.pointer_ops }
-    }
-    unsafe impl<T, A: Allocator + Clone> PointerOps for BoxPointerOps<T, A> {
         type Pointer = Box<T, A>;
         type Value = T;
 
@@ -115,61 +127,13 @@ mod arc {
     impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone>
         LinkedPtr<LINK_OFFSET> for Arc<T, A>
     {
-        type DefaultAdapter = ArcAdapter<LINK_OFFSET, T, A>;
+        type DefaultAdapter = LinkedPtrAdapter<LINK_OFFSET, Arc<T, A>, A>;
     }
-    pub struct ArcAdapter<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> {
-        link_ops: linked_list::LinkOps,
-        pointer_ops: ArcPointerOps<T, A>,
-    }
-    pub struct ArcPointerOps<T, A: Allocator + Clone> {
-        alloc: A,
-        _phantom: PhantomData<Arc<T, A>>,
-    }
-    pub trait ArcLinkedListExt<A: Allocator + Clone> {
-        fn new_in(alloc: A) -> Self;
-    }
-    impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> ArcLinkedListExt<A>
-        for linked_list::LinkedList<ArcAdapter<LINK_OFFSET, T, A>>
+    unsafe impl<const LINK_OFFSET: usize, T, A> PointerOps for LinkedPtrOps<LINK_OFFSET, Arc<T, A>, A>
+    where
+        T: Linked<LINK_OFFSET>,
+        A: Allocator + Clone,
     {
-        fn new_in(alloc: A) -> Self {
-            let adapter = ArcAdapter {
-                link_ops: linked_list::LinkOps,
-                pointer_ops: ArcPointerOps {
-                    alloc,
-                    _phantom: PhantomData,
-                },
-            };
-            Self::new(adapter)
-        }
-    }
-    unsafe impl<const LINK_OFFSET: usize, T: Linked<LINK_OFFSET>, A: Allocator + Clone> Adapter
-        for ArcAdapter<LINK_OFFSET, T, A>
-    {
-        type LinkOps = linked_list::LinkOps;
-        type PointerOps = ArcPointerOps<T, A>;
-
-        unsafe fn get_value(
-            &self,
-            link: <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr,
-        ) -> *const <Self::PointerOps as PointerOps>::Value {
-            // SAFETY: LINK_OFFSET should be the offset.
-            unsafe { link.byte_sub(LINK_OFFSET).as_ptr().cast_const().cast() }
-        }
-        unsafe fn get_link(
-            &self,
-            value: *const <Self::PointerOps as PointerOps>::Value,
-        ) -> <Self::LinkOps as intrusive_collections::LinkOps>::LinkPtr {
-            // SAFETY: LINK_OFFSET should be the offset.
-            unsafe { NonNull::new_unchecked(value.byte_add(LINK_OFFSET).cast_mut().cast()) }
-        }
-
-        fn link_ops(&self) -> &Self::LinkOps { &self.link_ops }
-
-        fn link_ops_mut(&mut self) -> &mut Self::LinkOps { &mut self.link_ops }
-
-        fn pointer_ops(&self) -> &Self::PointerOps { &self.pointer_ops }
-    }
-    unsafe impl<T, A: Allocator + Clone> PointerOps for ArcPointerOps<T, A> {
         type Pointer = Arc<T, A>;
         type Value = T;
 

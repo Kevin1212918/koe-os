@@ -4,7 +4,7 @@ use core::alloc::{Allocator, Layout};
 use crate::arch::hlt;
 use crate::common::log::{info, ok};
 use crate::mem::SlabAllocator;
-use crate::sched::{self, KStack, Scheduler, ThreadState};
+use crate::sched::{self, KThread, Scheduler, ThreadState};
 
 pub fn test_mem() {
     // FIXME: reorganize test cases
@@ -42,17 +42,17 @@ pub fn test_mem() {
 }
 
 pub fn test_kthread() {
-    Scheduler::launch(task2, 1);
-    Scheduler::launch(task1, 1);
-    Scheduler::launch(task1, 1);
+    Scheduler::new().launch(task2, 1);
+    Scheduler::new().launch(task1, 1);
+    Scheduler::new().launch(task1, 1);
 }
 
 fn task1() {
     ok!("executing task1");
-    Scheduler::launch(task4, 1);
-    Scheduler::launch(task3, 1);
-    Scheduler::launch(task3, 1);
-    Scheduler::launch(task2, 1);
+    Scheduler::new().launch(task4, 1);
+    Scheduler::new().launch(task3, 1);
+    Scheduler::new().launch(task3, 1);
+    Scheduler::new().launch(task2, 1);
 }
 
 fn task3() {

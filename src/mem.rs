@@ -2,6 +2,7 @@ use core::arch::asm;
 use core::ops::Range;
 
 use addr::Addr;
+use arch::MemoryMap;
 use bitvec::field::BitField;
 use bitvec::order::Lsb0;
 use bitvec::view::BitView;
@@ -64,3 +65,5 @@ pub fn kernel_size() -> usize {
         .try_into()
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
+
+pub type Paging = paging::MapRef<MemoryMap>;
