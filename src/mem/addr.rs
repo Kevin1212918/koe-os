@@ -416,7 +416,7 @@ impl<S: AddrSpace> Page<S> {
     /// Increment the address by `page_cnt` pages.
     ///
     /// Returns `None` if the resulting address overflows the address space.
-    pub fn checked_page_add(mut self, page_cnt: usize) -> Option<Self> {
+    pub fn checked_add(mut self, page_cnt: usize) -> Option<Self> {
         self.base = self
             .base
             .checked_byte_add(page_cnt * self.page_size.usize())?;
@@ -426,7 +426,7 @@ impl<S: AddrSpace> Page<S> {
     /// Decrement the address by `page_cnt` pages.
     ///
     /// Returns `None` if the resulting address overflows the address space.
-    pub fn checked_page_sub(mut self, page_cnt: usize) -> Option<Self> {
+    pub fn checked_sub(mut self, page_cnt: usize) -> Option<Self> {
         self.base = self
             .base
             .checked_byte_sub(page_cnt * self.page_size.usize())?;
@@ -445,13 +445,15 @@ pub struct PageRange<S: AddrSpace> {
 impl<S: AddrSpace> IntoIterator for PageRange<S> {
     type Item = Page<S>;
 
-    type IntoIter = impl Iterator<Item = Self::Item>;
+    type IntoIter =
+        impl DoubleEndedIterator<Item = Self::Item> + ExactSizeIterator<Item = Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         let start: usize = self.base.base.usize();
         let step = self.page_size().usize();
+        let end: usize = self.base.base.usize() + self.len * step;
 
-        (start..)
+        (start..end)
             .step_by(step)
             .take(self.len)
             .map(move |base| Page::new(Addr::new(base), self.page_size()))

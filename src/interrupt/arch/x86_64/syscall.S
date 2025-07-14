@@ -1,5 +1,7 @@
 .extern KERNEL_ENTRY_STACK_PTR
 
+.globl do_syscall_entry
+.globl do_syscall_exit
 // User space syscall kernel entry. 
 // Entered from the syscall instruction. Interrupt is disabled upon entry.
 // 
@@ -14,7 +16,7 @@
 // - r11: calling rflags 
 // - rcx: return ip
 // - rsp: calling stack
-do_syscall: 
+do_syscall_entry: 
   mov [KERNEL_ENTRY_STACK_PTR], rsp  // Put stack pointer on top of kernel entry stack
   mov rsp, KERNEL_ENTRY_STACK_PTR    // switch stack 
 
@@ -23,10 +25,23 @@ do_syscall:
 
   mov rcx, r10                       // move arg4 to the System V specified register 
   
-  call RUST_HANDLER
-
+  // call RUST_HANDLER
+do_syscall_exit:
   pop r11
   pop rcx
 
   pop rsp
-  sysret
+  sysretq
+
+.globl set_syscall_msrs
+set_syscall_msrs:
+  mov rcx, 0xc0000082                // Write syscall entry address to IA32_LSTAR MSR
+  mov rax, do_syscall_entry
+  mov rdx, do_syscall_entry >> 32
+  wrmsr
+
+  mov rcx, 0xc0000084
+  mov rax, 1 << 9                    // Mask out interrupt flag 
+  mov rdx, 0 
+  wrmsr
+  ret

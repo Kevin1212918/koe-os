@@ -34,6 +34,7 @@ use core::ptr::slice_from_raw_parts_mut;
 use arch::die;
 use multiboot2::{BootInformation, BootInformationHeader};
 use test::test_kthread;
+use usr::Task;
 
 use crate::common::log::{error, ok};
 use crate::drivers::serial;
@@ -110,5 +111,6 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
 
 fn kmain() {
     ok!("Enter kmain");
-    test_kthread();
+    Task::launch();
+    // test_kthread();
 }

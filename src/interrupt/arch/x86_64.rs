@@ -14,6 +14,7 @@ pub fn init() {
     isr::init_exn_handlers();
     isr::init_irq_handlers();
     pic::init_pic();
+    syscall::init_syscall();
 
     pic::mask_all();
     pic::unmask(0);

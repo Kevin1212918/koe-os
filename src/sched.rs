@@ -33,13 +33,13 @@ pub fn init_scheduler(main: fn()) {
 
 pub fn init_switch() -> ! {
     let intrpt = IntrptGuard::new();
-    // Reclaiming the initial preempt guard. Note that since intrpt guard is live,
-    // no preemption will occur until intrpt is enabled.
+    //  SAFETY: Reclaiming the initial preempt guard. Note that since intrpt guard
+    // is live, no preemption will occur until intrpt is enabled.
     drop(unsafe { PreemptGuard::reclaim() });
+    // SAFETY: Initial threads are on cpu 0
     unsafe { Scheduler::new().force_switch(0, Some(intrpt)) };
 }
 
-unsafe impl Sync for Scheduler {}
 /// Per-CPU structure managing currently running threads.
 pub struct Scheduler();
 impl Scheduler {
@@ -114,7 +114,7 @@ impl Scheduler {
         Box::leak(new_thread);
 
         // SAFETY: The current thread is in the current dispatcher, which is locked.
-        let mut my_thread = unsafe { Box::from_raw(KThread::cur_thread_ptr()) };
+        let mut my_thread = unsafe { Box::from_raw(KThread::my_thread_ptr()) };
         let my_tcb = &mut my_thread.tcb;
         let my_tid = my_tcb.tid;
 
@@ -140,7 +140,7 @@ impl Scheduler {
         unsafe { IntrptGuard::reclaim() };
 
         // SAFETY: unlock current dispatcher.
-        unsafe { DISPATCHERS[KThread::cur_cpu_id() as usize].force_unlock() };
+        unsafe { DISPATCHERS[KThread::my_cpu_id() as usize].force_unlock() };
     }
 
     /// Transfer control to a ready thread and leak the current thread.
@@ -190,10 +190,10 @@ extern "C" fn kthread_entry() -> ! {
     drop(intrpt);
 
     // SAFETY: unlock current dispatcher.
-    unsafe { DISPATCHERS[KThread::cur_cpu_id() as usize].force_unlock() };
+    unsafe { DISPATCHERS[KThread::my_cpu_id() as usize].force_unlock() };
 
     debug_assert!(IntrptGuard::cnt() == 0);
-    KThread::cur_main()();
+    KThread::my_main()();
 
     // Exit by scheduling as zombie.
     Scheduler::new().reschedule(ThreadState::Zombie, None);

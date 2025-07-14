@@ -79,7 +79,7 @@ impl KThread {
         }
     }
 
-    pub fn boxed(main: fn(), cpu_id: u8, priority: u8, is_usr: bool) -> Box<Self> {
+    pub(super) fn boxed(main: fn(), cpu_id: u8, priority: u8, is_usr: bool) -> Box<Self> {
         let res = Box::pin_init(KThread::new(
             main, cpu_id, priority, is_usr,
         ))
@@ -89,8 +89,8 @@ impl KThread {
         unsafe { Pin::into_inner_unchecked(res) }
     }
 
-    pub fn cur_tid() -> ThreadId {
-        let thread_ptr = Self::cur_thread_ptr();
+    pub fn my_tid() -> ThreadId {
+        let thread_ptr = Self::my_thread_ptr();
         // SAFETY: dereference in place expr is safe.
         let tid_ptr = unsafe { &raw const (*thread_ptr).tcb.tid };
 
@@ -98,8 +98,8 @@ impl KThread {
         unsafe { ptr::read(tid_ptr) }
     }
 
-    pub fn cur_cpu_id() -> u8 {
-        let thread_ptr = Self::cur_thread_ptr();
+    pub fn my_cpu_id() -> u8 {
+        let thread_ptr = Self::my_thread_ptr();
         // SAFETY: dereference in place expr is safe.
         let cpu_id_ptr = unsafe { &raw const (*thread_ptr).tcb.cpu_id };
 
@@ -109,8 +109,8 @@ impl KThread {
         unsafe { ptr::read(cpu_id_ptr) }
     }
 
-    pub fn cur_main() -> fn() {
-        let thread_ptr = Self::cur_thread_ptr();
+    pub(super) fn my_main() -> fn() {
+        let thread_ptr = Self::my_thread_ptr();
         // SAFETY: dereference in place expr is safe.
         let main_ptr = unsafe { &raw const (*thread_ptr).tcb.main };
 
@@ -118,7 +118,7 @@ impl KThread {
         unsafe { ptr::read(main_ptr) }
     }
 
-    pub(super) fn cur_thread_ptr() -> *mut KThread {
+    pub(super) fn my_thread_ptr() -> *mut KThread {
         let stack_ptr = stack_ptr();
 
         let mask = !(THREAD_SIZE - 1);

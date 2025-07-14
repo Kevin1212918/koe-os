@@ -12,7 +12,7 @@ use virt::KernelImageSpace;
 pub mod addr;
 mod alloc;
 mod arch;
-mod paging;
+pub mod paging;
 mod phy;
 mod virt;
 

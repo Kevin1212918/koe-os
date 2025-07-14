@@ -140,10 +140,11 @@ _enable_paging:
     or eax, 0b100000
     mov cr4, eax
 
-    /* Enable long mode */
+    /* Enable long mode and syscall */
     mov ecx, 0xC0000080
     rdmsr
     or eax, 1 << 8
+    or eax, 1
     wrmsr
 
     /* Enable paging */

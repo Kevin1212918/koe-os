@@ -213,7 +213,7 @@ impl From<Attribute> for Flags {
             flags |= Flags::NO_CACHE;
         } else if value.intersects(Attribute::WRITE_THRU) {
             flags |= Flags::WRITE_THRU;
-        } else {
+        } else if !value.intersects(Attribute::WRITE_BACK) {
             unimplemented!()
         }
         flags

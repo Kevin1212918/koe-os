@@ -140,7 +140,7 @@ impl PhysicalMemoryRecord {
 
         let base = self
             .base
-            .checked_page_add(frame_idx)
+            .checked_add(frame_idx)
             .expect("index returned by buddy system should be correctly sized");
         let base = Page::new(base.addr(), page_size);
 
