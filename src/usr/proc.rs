@@ -80,8 +80,6 @@ impl Task {
 
 fn usr_entry() {
     info!("Entering baby user!");
-    // FIXME: Temporary measure. Delete this
-    unsafe { set_kernel_entry_stack(stack_ptr() as usize, None) };
     unsafe { enter_usr(STACK_BASE, baby_usr as InstrPtr) };
 }
 

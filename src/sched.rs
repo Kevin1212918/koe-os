@@ -16,6 +16,7 @@ use crate::common::log::{error, info, ok};
 use crate::common::StackPtr;
 use crate::interrupt::IntrptGuard;
 use crate::sync::{spin, InitCell};
+use crate::usr::switch_task;
 
 mod arch;
 mod thread;
@@ -83,14 +84,12 @@ impl Scheduler {
         tid
     }
 
-    // TODO: refactor reschedule and force_switch
-
-    /// Yields to a new thread while rescheduling the current thread to
+    /// Yields to a new thread while scheduling the current thread to
     /// `new_state`.
     ///
     /// This call blocks until the thread is switched back, or never returns if
     /// `new_state` is [`ThreadState::Zombie`].
-    pub fn reschedule(&self, new_state: ThreadState, intrpt: Option<IntrptGuard>) {
+    pub fn schedule(&self, new_state: ThreadState, intrpt: Option<IntrptGuard>) {
         if new_state == ThreadState::Running {
             return;
         }
@@ -100,41 +99,26 @@ impl Scheduler {
         let intrpt = intrpt.unwrap_or_else(|| IntrptGuard::new());
         let mut dispatch = DISPATCHERS[0].lock();
 
-        let Some(mut new_thread) = dispatch.next() else {
+        let Some((prev, next)) = dispatch.schedule(new_state, &intrpt) else {
             return;
         };
 
-        let new_tid = new_thread.tcb.tid;
-        let new_tcb = &mut new_thread.tcb;
+        info!(
+            "Switch from thread {} to thread {}",
+            prev.tcb.tid, next.tcb.tid
+        );
 
-        debug_assert!(new_tcb.state.load(Ordering::Relaxed) == ThreadState::Ready);
-        new_tcb.state.store(ThreadState::Running, Ordering::Relaxed);
-        let new_stack_ptr = new_tcb.sp;
-        // NOTE: New running thread is recovered next time it enters reschedule.
-        Box::leak(new_thread);
-
-        // SAFETY: The current thread is in the current dispatcher, which is locked.
-        let mut my_thread = unsafe { Box::from_raw(KThread::my_thread_ptr()) };
-        let my_tcb = &mut my_thread.tcb;
-        let my_tid = my_tcb.tid;
-
-        debug_assert!(my_tcb.state.load(Ordering::Relaxed) == ThreadState::Running);
-        my_tcb.state.store(new_state, Ordering::Relaxed);
-        let my_stack_ptr = &raw mut my_tcb.sp;
-        dispatch.put(my_thread);
+        let prev_sp = &raw mut prev.tcb.sp;
+        let next_sp = next.tcb.sp;
 
         // NOTE: Dispatch is reclaimed when exiting switch_to
         spin::MutexGuard::leak(dispatch);
         // NOTE: IntrptGuard is reclaimed when exiting switch_to
         intrpt.leak();
-        info!(
-            "Switch from thread {} to thread {}",
-            my_tid, new_tid
-        );
 
         // SAFETY: cur and new are valid as guarenteed by before_switch. Interrupt and
         // scheduler are locked by before_switch.
-        unsafe { switch_to(my_stack_ptr, new_stack_ptr) };
+        unsafe { switch_to(prev_sp, next_sp) };
 
         // SAFETY: reclaiming previously leaked intrpt guard.
         unsafe { IntrptGuard::reclaim() };
@@ -196,7 +180,7 @@ extern "C" fn kthread_entry() -> ! {
     KThread::my_main()();
 
     // Exit by scheduling as zombie.
-    Scheduler::new().reschedule(ThreadState::Zombie, None);
+    Scheduler::new().schedule(ThreadState::Zombie, None);
 
     // SAFETY: rescheduling to zombie will stop the thread from being switched to
     // again.
@@ -207,6 +191,7 @@ struct Dispatcher {
     ready_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
     zombie_threads: LinkedList<THREAD_LINK_OFFSET, Box<KThread>>,
     idle: Option<Box<KThread>>,
+    prev_usr_tid: Option<ThreadId>,
 }
 impl Dispatcher {
     fn new() -> Self {
@@ -214,6 +199,7 @@ impl Dispatcher {
             ready_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
             zombie_threads: LinkedList::<THREAD_LINK_OFFSET, Box<KThread>>::new_in(Global),
             idle: None,
+            prev_usr_tid: None,
         }
     }
 
@@ -228,6 +214,39 @@ impl Dispatcher {
             // SAFETY: we check at start of the function that new_state is not running.
             ThreadState::Running => None,
         }
+    }
+
+    fn schedule(
+        &mut self,
+        new_state: ThreadState,
+        intrpt: &IntrptGuard,
+    ) -> Option<(&mut KThread, &mut KThread)> {
+        let mut new_thread = self.next()?;
+
+        if new_thread.tcb.is_usr
+            && self
+                .prev_usr_tid
+                .is_none_or(|prev_id| prev_id != new_thread.tcb.tid)
+        {
+            switch_task(&new_thread);
+            self.prev_usr_tid = Some(new_thread.tcb.tid);
+        }
+
+        // SAFETY: The current thread is in the current dispatcher, which is locked.
+        let mut my_thread = unsafe { Box::from_raw(KThread::my_thread_ptr()) };
+        let my_tcb = &mut my_thread.tcb;
+        debug_assert!(my_tcb.state.load(Ordering::Relaxed) == ThreadState::Running);
+        my_tcb.state.store(new_state, Ordering::Relaxed);
+        self.put(my_thread);
+
+        let new_tcb = &mut new_thread.tcb;
+        debug_assert!(new_tcb.state.load(Ordering::Relaxed) == ThreadState::Ready);
+        new_tcb.state.store(ThreadState::Running, Ordering::Relaxed);
+
+        // SAFETY: We have mutable reference to the dispatcher tracking the current
+        // thread.
+        let my_thread = unsafe { KThread::my_thread_ptr().as_mut_unchecked() };
+        Some((my_thread, Box::leak(new_thread)))
     }
 
     /// Take the next ready thread.
@@ -289,7 +308,7 @@ static PREEMPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(1);
 pub fn preempt(intrpt: IntrptGuard) {
     if PreemptGuard::cnt() == 0 {
         // SAFETY: Preemption is enabled after scheduler is initialized.
-        Scheduler::new().reschedule(ThreadState::Ready, Some(intrpt));
+        Scheduler::new().schedule(ThreadState::Ready, Some(intrpt));
     }
 }
 

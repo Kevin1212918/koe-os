@@ -89,6 +89,10 @@ impl KThread {
         unsafe { Pin::into_inner_unchecked(res) }
     }
 
+    pub fn stack_base(&self) -> StackPtr {
+        unsafe { (&raw const self.stack).add(KERNEL_STACK_ARRAY_LEN) as StackPtr }
+    }
+
     pub fn my_tid() -> ThreadId {
         let thread_ptr = Self::my_thread_ptr();
         // SAFETY: dereference in place expr is safe.

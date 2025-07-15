@@ -111,6 +111,6 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
 
 fn kmain() {
     ok!("Enter kmain");
-    Task::launch();
-    // test_kthread();
+    // Task::launch();
+    test_kthread();
 }
