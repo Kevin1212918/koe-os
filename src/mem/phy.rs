@@ -276,7 +276,7 @@ unsafe impl Allocator for BootMemoryManager {
             .base;
         let vaddr = PhysicalRemapSpace::p2v(paddr);
 
-        let ptr = NonNull::new(vaddr.into_ptr::<u8>().cast()).ok_or(AllocError)?;
+        let ptr = NonNull::new(vaddr.as_ptr::<u8>().cast()).ok_or(AllocError)?;
         Ok(NonNull::slice_from_raw_parts(
             ptr,
             layout.size(),

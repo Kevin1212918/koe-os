@@ -34,7 +34,9 @@ fn double_fault_handler(stack: &IntrptStack) {
     die();
 }
 
-fn default_exn_handler() {}
+fn default_exn_handler(stack: &IntrptStack) {
+    error!("Unknown error!");
+}
 
 const _: () = assert!(size_of::<IntrptGuard>() == 0);
 #[no_mangle]
@@ -42,7 +44,7 @@ extern "C" fn exception_sr(vec: IntrptVector, stack: &IntrptStack) {
     match vec {
         VECTOR_PF => page_fault_handler(stack),
         VECTOR_DF => double_fault_handler(stack),
-        _ => default_exn_handler(),
+        _ => default_exn_handler(stack),
     }
 }
 

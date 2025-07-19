@@ -4,11 +4,11 @@
 .globl enter_usr
 enter_usr:
   cli
-  mov rsp, KERNEL_ENTRY_STACK_PTR 
+  mov rsp, [KERNEL_ENTRY_STACK_PTR] 
   
   push rdi 
   push rsi 
-  push 3 << 12        // Set iopl to 3
+  push 1 << 9 | 3 << 12     // Set iopl to 3
 
   jmp do_syscall_exit
 

@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::{FileSystem, INode};
@@ -17,5 +18,5 @@ impl Vfs {
 }
 impl FileSystem for Vfs {
     fn root(&self) -> Rc<dyn INode> { self.mounts[0].root() }
-    fn resolve(&self, path: &str) -> Option<Rc<dyn INode>> { self.mounts[0].resolve(path) }
+    fn resolve(&self, path: &str) -> Option<Arc<dyn INode>> { self.mounts[0].resolve(path) }
 }

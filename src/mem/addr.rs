@@ -1,4 +1,5 @@
 use core::alloc::Layout;
+use core::iter::Peekable;
 use core::marker::PhantomData;
 use core::ops::{Add, Range, Sub};
 
@@ -161,7 +162,7 @@ impl<S: VirtSpace> Addr<S> {
 
     pub fn from_mut_ptr<T>(value: *mut T) -> Self { Addr::new(value as usize) }
 
-    pub fn into_ptr<T>(self) -> *mut T { self.usize() as *mut T }
+    pub fn as_ptr<T>(self) -> *mut T { self.usize() as *mut T }
 
     pub fn index_range(self, range: &Range<usize>) -> usize {
         if range.is_empty() {
@@ -383,6 +384,51 @@ impl<S: AddrSpace> Iterator for SplitAligned<S> {
         };
         self.offset += next_size;
         Some(next)
+    }
+}
+
+
+pub struct IntersectRanges<I1, I2, S>
+where
+    S: AddrSpace,
+    I1: Iterator<Item = AddrRange<S>>,
+    I2: Iterator<Item = AddrRange<S>>,
+{
+    pub ranges1: Peekable<I1>,
+    pub ranges2: Peekable<I2>,
+}
+
+impl<I1, I2, S> Iterator for IntersectRanges<I1, I2, S>
+where
+    S: AddrSpace,
+    I1: Iterator<Item = AddrRange<S>>,
+    I2: Iterator<Item = AddrRange<S>>,
+{
+    type Item = AddrRange<S>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut r1_opt = self.ranges1.peek();
+        let mut r2_opt = self.ranges2.peek();
+
+        loop {
+            let r1 = r1_opt.cloned()?;
+            let r2 = r2_opt.cloned()?;
+
+            let intersect = r1.range_intersect(&r2);
+
+            if r1.end() <= r2.end() {
+                self.ranges1.next();
+                r1_opt = self.ranges1.peek();
+            }
+            if r2.end() <= r1.end() {
+                self.ranges2.next();
+                r2_opt = self.ranges2.peek();
+            }
+
+            if !intersect.is_empty() {
+                return Some(intersect);
+            }
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use core::mem::MaybeUninit;
 use arrayvec::ArrayVec;
 use multiboot2::{BootInformation, MemoryAreaType};
 
-use crate::mem::addr::{Addr, AddrRange, AddrSpace, PageSize};
+use crate::mem::addr::{self, Addr, AddrRange, AddrSpace, PageSize};
 use crate::mem::{kernel_end_lma, kernel_start_lma, UMASpace};
 
 pub fn init(boot_info: &BootInformation) -> &'static mut MemblockSystem {
@@ -156,7 +156,7 @@ impl MemblockSystem {
             .map(|(start, end)| AddrRange::from(start..end))
             .peekable();
 
-        IntersectRanges {
+        addr::IntersectRanges {
             ranges1: memory_regions,
             ranges2: not_reserved_regions,
         }
@@ -195,47 +195,5 @@ impl MemblockSystem {
     /// Returns an iterator to the memory ranges.
     pub fn memory_regions(&self) -> impl Iterator<Item = AddrRange<UMASpace>> + '_ {
         self.memory_blocks.data.iter().cloned()
-    }
-}
-
-pub struct IntersectRanges<I1, I2>
-where
-    I1: Iterator<Item = AddrRange<UMASpace>>,
-    I2: Iterator<Item = AddrRange<UMASpace>>,
-{
-    ranges1: Peekable<I1>,
-    ranges2: Peekable<I2>,
-}
-
-impl<I1, I2> Iterator for IntersectRanges<I1, I2>
-where
-    I1: Iterator<Item = AddrRange<UMASpace>>,
-    I2: Iterator<Item = AddrRange<UMASpace>>,
-{
-    type Item = AddrRange<UMASpace>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut r1_opt = self.ranges1.peek();
-        let mut r2_opt = self.ranges2.peek();
-
-        loop {
-            let r1 = r1_opt.cloned()?;
-            let r2 = r2_opt.cloned()?;
-
-            let intersect = r1.range_intersect(&r2);
-
-            if r1.end() <= r2.end() {
-                self.ranges1.next();
-                r1_opt = self.ranges1.peek();
-            }
-            if r2.end() <= r1.end() {
-                self.ranges2.next();
-                r2_opt = self.ranges2.peek();
-            }
-
-            if !intersect.is_empty() {
-                return Some(intersect);
-            }
-        }
     }
 }

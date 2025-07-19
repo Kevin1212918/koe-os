@@ -12,28 +12,28 @@ use super::phy::BootMemoryManager;
 use super::virt::VirtSpace;
 use super::UMASpace;
 
-pub fn init(bmm: &BootMemoryManager) -> impl MemoryManager { super::arch::init(bmm) }
+pub fn init(bmm: &BootMemoryManager) { super::arch::init(bmm) }
 
 /// Smart shared reference to a memory map.
 #[derive(From)]
-pub enum MapRef<M: MemoryMap> {
+pub enum MemoryMapRef<M: MemoryMap> {
     Static(&'static M),
     Arc(Arc<M>),
 }
-impl<M: MemoryMap> MapRef<M> {
-    pub fn new() -> MapRef<M> { Self::Arc(Arc::new(MemoryMap::new())) }
+impl<M: MemoryMap> MemoryMapRef<M> {
+    pub fn new() -> MemoryMapRef<M> { Self::Arc(Arc::new(MemoryMap::new())) }
 }
-impl<M: MemoryMap> Deref for MapRef<M> {
+impl<M: MemoryMap> Deref for MemoryMapRef<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
         match self {
-            MapRef::Static(r) => r,
-            MapRef::Arc(r) => r,
+            MemoryMapRef::Static(r) => r,
+            MemoryMapRef::Arc(r) => r,
         }
     }
 }
-impl<M: MemoryMap> Clone for MapRef<M> {
+impl<M: MemoryMap> Clone for MemoryMapRef<M> {
     fn clone(&self) -> Self {
         match self {
             Self::Static(arg0) => Self::Static(arg0),
@@ -55,7 +55,7 @@ pub trait MemoryManager {
     /// # Safety
     /// While this function is safe, the caller should uphold the safety
     /// guarentees from [`MemoryMap::map`].
-    fn swap(&mut self, new: MapRef<Self::Map>);
+    fn swap(&mut self, new: MemoryMapRef<Self::Map>);
 
     /// Borrow the current memory map.
     fn map(&mut self) -> &Self::Map;
@@ -126,9 +126,10 @@ pub trait MemoryMap: 'static + Sync + Send {
 
 bitflags! {
 /// Page attribtutes. Exactly one of the cache flags should be set.
+#[derive(Debug, Clone, Copy)]
 pub struct Attribute: u16 {
     // Universal
-    const IS_KERNEL = 0b1;
+    const IS_USR = 0b1;
     const WRITEABLE = 0b10;
 
     // Cache.

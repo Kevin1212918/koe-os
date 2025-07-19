@@ -7,7 +7,7 @@ use core::{slice, str};
 
 use bitflags::bitflags;
 
-use super::{Error, FileSystem, INode, Result};
+use super::{Error, FileSystem, INode, Result, Stat};
 
 pub const BLOCK_SIZE: usize = 512;
 
@@ -64,10 +64,10 @@ impl FileSystem for UStarFs {
         })
     }
 
-    fn resolve(&self, path: &str) -> Option<Rc<dyn INode>> {
+    fn resolve(&self, path: &str) -> Option<Arc<dyn INode>> {
         let tape = self.0.lock();
         let header_off = Self::find_header_off(&tape, path)?;
-        Some(Rc::new(UStarNode {
+        Some(Arc::new(UStarNode {
             fs: self.clone(),
             header_off,
         }))
@@ -81,6 +81,13 @@ impl INode for UStarNode {
         let byte_cnt = usize::min(buf.len(), available_cnt);
         buf[0..byte_cnt].copy_from_slice(&file[offset..offset + byte_cnt]);
         Ok(byte_cnt)
+    }
+
+    fn stat(&self) -> Stat {
+        let tape = self.fs.0.lock();
+        Stat {
+            size: Self::header(&tape, self.header_off).size(),
+        }
     }
 }
 

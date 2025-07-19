@@ -22,7 +22,7 @@ use crate::mem::addr::PageSize;
 use crate::sched::arch::write_init_stack;
 
 pub(super) const THREAD_LINK_OFFSET: usize = offset_of!(KThread, link);
-pub const THREAD_PAGE_CNT: usize = 4;
+pub const THREAD_PAGE_CNT: usize = 8;
 pub const THREAD_SIZE: usize = THREAD_PAGE_CNT * PageSize::MIN.usize();
 pub const KERNEL_STACK_SIZE: usize = THREAD_SIZE - size_of::<Link>() - size_of::<Tcb>();
 const KERNEL_STACK_ARRAY_LEN: usize = KERNEL_STACK_SIZE / size_of::<usize>();
@@ -33,7 +33,7 @@ const _: () = assert!(align_of::<KThread>() == THREAD_SIZE);
 
 unsafe impl Linked<THREAD_LINK_OFFSET> for KThread {}
 #[pin_data]
-#[repr(C, align(16384))]
+#[repr(C, align(32768))]
 pub struct KThread {
     #[pin]
     _pin: PhantomPinned,
@@ -80,18 +80,25 @@ impl KThread {
     }
 
     pub(super) fn boxed(main: fn(), cpu_id: u8, priority: u8, is_usr: bool) -> Box<Self> {
+        info!("Allocating new kthread stack");
         let res = Box::pin_init(KThread::new(
             main, cpu_id, priority, is_usr,
         ))
         .unwrap();
+        info!(
+            "Allocated new kthread stack at {:#x}",
+            res.stack_base()
+        );
         // FIXME: Change dispatch to handle pinned kthread.
         // SAFETY: Unsafe!
         unsafe { Pin::into_inner_unchecked(res) }
     }
 
     pub fn stack_base(&self) -> StackPtr {
-        unsafe { (&raw const self.stack).add(KERNEL_STACK_ARRAY_LEN) as StackPtr }
+        unsafe { (&raw const self.stack).byte_add(KERNEL_STACK_SIZE) as StackPtr }
     }
+
+    pub fn tid(&self) -> ThreadId { self.tcb.tid }
 
     pub fn my_tid() -> ThreadId {
         let thread_ptr = Self::my_thread_ptr();

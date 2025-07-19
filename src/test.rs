@@ -42,17 +42,17 @@ pub fn test_mem() {
 }
 
 pub fn test_kthread() {
-    Scheduler::new().launch(task2, 1);
-    Scheduler::new().launch(task1, 1);
-    Scheduler::new().launch(task1, 1);
+    Scheduler::new().launch(task2, 1, false);
+    Scheduler::new().launch(task1, 1, false);
+    Scheduler::new().launch(task1, 1, false);
 }
 
 fn task1() {
     ok!("executing task1");
-    Scheduler::new().launch(task4, 1);
-    Scheduler::new().launch(task3, 1);
-    Scheduler::new().launch(task3, 1);
-    Scheduler::new().launch(task2, 1);
+    Scheduler::new().launch(task4, 1, false);
+    Scheduler::new().launch(task3, 1, false);
+    Scheduler::new().launch(task3, 1, false);
+    Scheduler::new().launch(task2, 1, false);
 }
 
 fn task3() {

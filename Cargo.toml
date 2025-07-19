@@ -18,7 +18,7 @@ bytemuck = "1.23.1"
 derive_more = { version = "1.0.0", default-features = false, features = [
     "full",
 ] }
-goblin = { version = "0.9.3", default-features = false, features = ["elf64"] }
+goblin = { version = "0.9.3", default-features = false, features = ["elf64", "elf32", "endian_fd"] }
 hashbrown = { version = "0.15.4", default-features = false, features = ["default-hasher"] }
 intrusive-collections = "0.9.7"
 multiboot2 = { version = "0.23.0", default-features = false }

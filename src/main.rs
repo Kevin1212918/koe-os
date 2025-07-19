@@ -10,7 +10,8 @@
     strict_overflow_ops,
     const_alloc_layout,
     maybe_uninit_uninit_array_transpose,
-    slice_ptr_get
+    slice_ptr_get,
+    maybe_uninit_write_slice
 )]
 #![allow(clippy::needless_range_loop, private_interfaces)]
 #![deny(
@@ -111,6 +112,6 @@ fn find_initrd(boot_info: &BootInformation) -> Option<Box<[u8]>> {
 
 fn kmain() {
     ok!("Enter kmain");
-    // Task::launch();
-    test_kthread();
+    Task::launch("initrd/init");
+    // test_kthread();
 }

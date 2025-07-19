@@ -17,8 +17,8 @@ pub fn init() {
     unsafe {
         GDT.0[1] = SegmentDesc::kcode();
         GDT.0[2] = SegmentDesc::kdata();
-        GDT.0[3] = SegmentDesc::ucode();
-        GDT.0[4] = SegmentDesc::udata();
+        GDT.0[3] = SegmentDesc::udata();
+        GDT.0[4] = SegmentDesc::ucode();
         let [tss_low, tss_hi] = SegmentDesc::tss();
         GDT.0[5] = tss_low;
         GDT.0[6] = tss_hi;

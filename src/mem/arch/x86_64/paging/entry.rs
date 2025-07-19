@@ -186,7 +186,7 @@ impl Flags: u16 {
     // Universal set_flags
     const PRESENT = 0b1;
     const WRITEABLE = 0b10;
-    const IS_KERNEL = 0b100;
+    const IS_USR = 0b100;
     const WRITE_THRU = 0b1000;
     const NO_CACHE = 0b1_0000;
     const ACCESSED = 0b10_0000;
@@ -205,8 +205,9 @@ impl From<Attribute> for Flags {
         if value.contains(Attribute::WRITEABLE) {
             flags |= Flags::WRITEABLE;
         }
-        if value.contains(Attribute::IS_KERNEL) {
-            flags |= Flags::IS_KERNEL;
+        if value.contains(Attribute::IS_USR) {
+            flags |= Flags::IS_USR;
+        } else {
             flags |= Flags::GLOBAL;
         }
         if value.intersects(Attribute::UNCACHED | Attribute::UNCACHED_MINUS) {

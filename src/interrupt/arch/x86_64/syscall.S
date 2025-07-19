@@ -17,9 +17,11 @@
 // - rcx: return ip
 // - rsp: calling stack
 do_syscall_entry: 
-  mov [KERNEL_ENTRY_STACK_PTR], rsp  // Put stack pointer on top of kernel entry stack
-  mov rsp, KERNEL_ENTRY_STACK_PTR    // switch stack 
+  xor rsp, [KERNEL_ENTRY_STACK_PTR]  // xor swap rsp and kernel entry stack
+  xor [KERNEL_ENTRY_STACK_PTR], rsp
+  xor rsp, [KERNEL_ENTRY_STACK_PTR]  
 
+  push [KERNEL_ENTRY_STACK_PTR]
   push rcx                           // push return ip
   push r11                           // push calling rflags 
 
@@ -35,7 +37,12 @@ do_syscall_exit:
 
 .globl set_syscall_msrs
 set_syscall_msrs:
-  mov rcx, 0xc0000082                // Write syscall entry address to IA32_LSTAR MSR
+  mov rcx, 0xc0000081               // Write segment selectors indexs to IA32_STAR MSR
+  mov rax, 0x0000000000000000
+  mov rdx, 0x13 << 16 | 0x8         // Upper bits specify user cs idx, lower bits specify kernel cs idx.
+  wrmsr
+
+  mov rcx, 0xc0000082               // Write syscall entry address to IA32_LSTAR MSR
   mov rax, do_syscall_entry
   mov rdx, do_syscall_entry >> 32
   wrmsr

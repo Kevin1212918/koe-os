@@ -3,7 +3,7 @@ use core::alloc::Layout;
 use core::ops::Div as _;
 use core::ptr::NonNull;
 
-use crate::mem::addr::{self, Addr, AddrRange, AddrSpace, PageRange, PageSize};
+use crate::mem::addr::{self, Addr, AddrRange, AddrSpace, Page, PageRange, PageSize};
 use crate::mem::alloc::{allocate_if_zst, deallocate_if_zst};
 use crate::mem::phy::PhysicalMemoryManager;
 use crate::mem::virt::PhysicalRemapSpace;
@@ -16,6 +16,20 @@ use crate::mem::UMASpace;
 /// For now, this will only allocate [`PageSize::MIN`] page.
 #[derive(Debug, Clone, Copy)]
 pub struct PageAllocator;
+impl PageAllocator {
+    pub fn allocate_pages(&self, layout: Layout) -> Option<PageRange<UMASpace>> {
+        let addr_range = <Self as addr::Allocator<UMASpace>>::allocate(self, layout)?;
+        Some(
+            PageRange::try_from_range(addr_range, PageSize::MIN)
+                .expect("Page Allocator should be page aligned"),
+        )
+    }
+
+    pub unsafe fn deallocate_pages(&self, page: Page<UMASpace>, layout: Layout) {
+        unsafe { <Self as addr::Allocator<UMASpace>>::deallocate(self, page.addr(), layout) }
+    }
+}
+
 unsafe impl addr::Allocator<UMASpace> for PageAllocator {
     fn allocate(&self, layout: Layout) -> Option<AddrRange<UMASpace>> {
         if layout.size() == 0 {
@@ -62,7 +76,7 @@ unsafe impl Allocator for PageAllocator {
         }
 
         let phy = <Self as addr::Allocator<UMASpace>>::allocate(self, layout).ok_or(AllocError)?;
-        let base = unsafe { NonNull::new_unchecked(PhysicalRemapSpace::p2v(phy.base).into_ptr()) };
+        let base = unsafe { NonNull::new_unchecked(PhysicalRemapSpace::p2v(phy.base).as_ptr()) };
         Ok(NonNull::slice_from_raw_parts(
             base, phy.size,
         ))
@@ -110,20 +124,9 @@ unsafe impl Allocator for PhysicalPageManager {
         debug_assert!(prange.page_size() >= page_size);
 
         let vbase = PhysicalRemapSpace::p2v(prange.base.addr());
-        // let vrange = AddrRange::new(vbase, page_cnt * page_size.usize());
-        // let vrange = PageRange::try_from_range(vrange, page_size)
-        //     .expect("vbase and size should be page_aligned.");
 
-        let ptr = NonNull::new(vbase.into_ptr())
+        let ptr = NonNull::new(vbase.as_ptr())
             .expect("successfull virtual page allocation should not return null address");
-
-        // let flags = [Flag::Present, Flag::ReadWrite];
-        // for (vpage, ppage) in Iterator::zip(vrange.into_iter(), prange.into_iter()) {
-        // unsafe {
-        // MMU.map(vpage, ppage, flags, &mut pmm)
-        // .expect("TODO: cleanup");
-        // }
-        // }
 
         Ok(NonNull::slice_from_raw_parts(
             ptr,

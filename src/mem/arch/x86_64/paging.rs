@@ -1,4 +1,5 @@
 use core::alloc::{Allocator as _, Layout};
+use core::any::TypeId;
 use core::arch::asm;
 use core::cell::SyncUnsafeCell;
 use core::ops::Range;
@@ -8,10 +9,10 @@ use entry::{EntryRef, EntryTarget, Flags, RawEntry};
 use table::{RawTable, TableRef};
 
 use crate::mem::addr::{self, Addr, AddrSpace, Page, PageSize};
-use crate::mem::paging::{Attribute, MapRef};
+use crate::mem::paging::{Attribute, MemoryMapRef};
 use crate::mem::phy::BootMemoryManager;
 use crate::mem::virt::{KernelImageSpace, VirtSpace};
-use crate::mem::{kernel_end_vma, paging, PageAllocator, PhysicalRemapSpace, UMASpace};
+use crate::mem::{kernel_end_vma, paging, PageAllocator, PhysicalRemapSpace, UMASpace, UserSpace};
 
 mod entry;
 mod table;
@@ -33,7 +34,7 @@ static DEFAULT_KERNEL_MAP: spin::Once<MemoryMap> = spin::Once::new();
 ///
 /// All of PhysicalRemapSpace, KernelImageSpace, and kernel pdpts are statically
 /// allocated and should not be returned to allocators.
-pub fn init(bmm: &BootMemoryManager) -> MemoryManager {
+pub fn init(bmm: &BootMemoryManager) {
     static PML4_TABLE: SyncUnsafeCell<RawTable> = SyncUnsafeCell::new(RawTable::default());
     static PDPT_TABLES: SyncUnsafeCell<[RawTable; KERNEL_TABLES_CNT]> =
         SyncUnsafeCell::new([const { RawTable::default() }; KERNEL_TABLES_CNT]);
@@ -125,7 +126,7 @@ pub fn init(bmm: &BootMemoryManager) -> MemoryManager {
         let mut pml4_ent_ref = pml4_ref.index(idx);
         pml4_ent_ref.reinit(
             pdpt_table_paddr,
-            DEFAULT_PAGE_TABLE_FLAGS,
+            DEFAULT_PAGE_TABLE_FLAGS.union(Flags::IS_USR),
         );
     }
 
@@ -149,18 +150,18 @@ pub fn init(bmm: &BootMemoryManager) -> MemoryManager {
     // SAFETY: hand rolled cr3 is safe.
     unsafe { set_cr3(cr3_raw) };
     // SAFETY: DEFAULT_KERNEL_MAP is initialized before.
-    let memory_manager = MemoryManager(MapRef::from(unsafe {
+    let memory_manager = MemoryManager(MemoryMapRef::from(unsafe {
         DEFAULT_KERNEL_MAP.get_unchecked()
     }));
-    memory_manager
+    MMU.lock().insert(memory_manager);
 }
 
-pub struct MemoryManager(MapRef<MemoryMap>);
+pub struct MemoryManager(MemoryMapRef<MemoryMap>);
 
 impl paging::MemoryManager for MemoryManager {
     type Map = MemoryMap;
 
-    fn swap(&mut self, new: MapRef<MemoryMap>) {
+    fn swap(&mut self, new: MemoryMapRef<MemoryMap>) {
         self.0 = new;
         // SAFETY: MemoryMap is always in valid state.
         unsafe { set_cr3(*self.0.cr3.lock()) };
@@ -236,7 +237,7 @@ impl MemoryMap {
             let table_vaddr = PhysicalRemapSpace::p2v(addr);
             // SAFETY: cr3 contains valid pointer to the top-level table. We maintain
             // ownership over that table.
-            let raw_table = unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
+            let raw_table = unsafe { table_vaddr.as_ptr::<RawTable>().as_mut_unchecked() };
             // SAFETY: entry_ref provides the correct table level.
             let table_ref = unsafe { TableRef::from_raw(level, raw_table) };
             cont(table_ref)
@@ -275,7 +276,7 @@ impl paging::MemoryMap for MemoryMap {
         let pml4_table_ref = unsafe {
             TableRef::from_raw(
                 Level::PML4,
-                table_vaddr.into_ptr::<RawTable>().as_mut_unchecked(),
+                table_vaddr.as_ptr::<RawTable>().as_mut_unchecked(),
             )
         };
 
@@ -363,7 +364,7 @@ impl Drop for MemoryMap {
             let EntryTarget::Table(level, addr) = ent.target() else {
                 return;
             };
-            let table_ptr = PhysicalRemapSpace::p2v(addr).into_ptr::<RawTable>();
+            let table_ptr = PhysicalRemapSpace::p2v(addr).as_ptr::<RawTable>();
             // SAFETY: entry_ref provides a valid physical addr to table, which is mapped in
             // PhysicalRemapSpace.
             let raw_table = unsafe { table_ptr.as_mut_unchecked() };
@@ -436,7 +437,13 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
             EntryTarget::None | EntryTarget::Page(..) => {
                 let table_paddr = alloc.allocate(PageSize::Small.layout()).unwrap().base;
                 let table_level = self.cur_entry.level().next_level().unwrap();
-                self.cur_entry.reinit(table_paddr, DEFAULT_PAGE_TABLE_FLAGS);
+                let mut table_flags = DEFAULT_PAGE_TABLE_FLAGS;
+                if UserSpace::RANGE.contains(&self.target_vaddr.usize()) {
+                    table_flags = table_flags.union(Flags::IS_USR);
+                }
+
+
+                self.cur_entry.reinit(table_paddr, table_flags);
                 unsafe { self.down_with_table(table_paddr, table_level) }
             },
             EntryTarget::Table(level, addr) => unsafe { self.down_with_table(addr, level) },
@@ -454,7 +461,7 @@ impl<'a, T: VirtSpace> LinearWalker<'a, T> {
     ) -> &mut EntryRef<'a> {
         let table_vaddr = PhysicalRemapSpace::p2v(table_paddr);
 
-        let raw_table = unsafe { table_vaddr.into_ptr::<RawTable>().as_mut_unchecked() };
+        let raw_table = unsafe { table_vaddr.as_ptr::<RawTable>().as_mut_unchecked() };
         let table: TableRef<'a> = unsafe { TableRef::from_raw(table_level, raw_table) };
 
         self.cur_entry = table.index_with_vaddr(self.target_vaddr);

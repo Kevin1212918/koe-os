@@ -29,7 +29,7 @@ static DISPATCHERS: InitCell<[spin::Mutex<Dispatcher>; 1]> = unsafe { InitCell::
 /// Initialize scheduler and schedule the main task to be run later.
 pub fn init_scheduler(main: fn()) {
     let sched = Scheduler::new();
-    sched.launch(main, 1);
+    sched.launch(main, 1, false);
 }
 
 pub fn init_switch() -> ! {
@@ -55,7 +55,7 @@ impl Scheduler {
                 DISPATCHERS.init([spin::Mutex::new(Dispatcher::new())]);
             }
             let sched = Scheduler();
-            sched.launch(idle, u8::MAX);
+            sched.launch(idle, u8::MAX, false);
         });
         Self()
     }
@@ -63,9 +63,9 @@ impl Scheduler {
     /// Create a new thread and schedule it as `ThreadState::Ready`.
     ///
     /// Returns the `Tid` to the new thread.
-    pub fn launch(&self, main: fn(), priority: u8) -> ThreadId {
+    pub fn launch(&self, main: fn(), priority: u8, is_usr: bool) -> ThreadId {
         let preempt = PreemptGuard::new();
-        let thread = KThread::boxed(main, 0, priority, false);
+        let thread = KThread::boxed(main, 0, priority, is_usr);
         let tid = thread.tcb.tid;
         info!("Launch thread {}", tid);
 

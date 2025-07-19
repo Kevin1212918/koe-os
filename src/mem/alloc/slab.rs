@@ -17,6 +17,7 @@ use super::page::PageAllocator;
 use super::{allocate_if_zst, deallocate_if_zst};
 use crate::common::ll::boxed::BoxLinkedListExt as _;
 use crate::common::ll::{self, LinkedList};
+use crate::common::log::info;
 use crate::mem::addr::PageSize;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -58,6 +59,10 @@ unsafe impl Allocator for SlabAllocatorRecord {
             .next_multiple_of(1 << SlabAllocator::MIN_ORDER)
             .next_power_of_two()
             .ilog2() as u8;
+        info!(
+            "Allocating from cache order {}",
+            slot_order
+        );
         let mut cache = self.caches[(slot_order - SlabAllocator::MIN_ORDER) as usize].lock();
 
         // TODO: Refactor this shit
@@ -90,6 +95,10 @@ unsafe impl Allocator for SlabAllocatorRecord {
             .next_multiple_of(1 << SlabAllocator::MIN_ORDER)
             .next_power_of_two()
             .ilog2() as u8;
+        info!(
+            "Deallocating from cache order {}",
+            slot_order
+        );
         let mut cache = self.caches[(slot_order - SlabAllocator::MIN_ORDER) as usize].lock();
         // TODO: Refactor this shit
         // SAFETY: Cache for order i is always located at index i
@@ -286,7 +295,7 @@ const SLAB_BUF_SIZE: usize = SLAB_PAGE.usize()
     - size_of::<spin::Mutex<()>>()
     - size_of::<u16>()
     - size_of::<ll::Link>()
-    - SLAB_MAP_LEN * size_of::<usize>();
+    - SLAB_MAP_LEN * size_of::<u64>();
 
 /// A page-sized slab with metadata.
 ///
@@ -301,6 +310,7 @@ struct Slab<T: Item> {
 
 // TODO: workaround
 // Annoying hack to ensure layout of Slab is generic.
+const _: () = assert!(size_of::<UntypedSlab>() == PageSize::MIN.usize());
 #[repr(C)]
 struct UntypedSlab {
     link: ll::Link,
@@ -353,7 +363,10 @@ impl<T: Item> Slab<T> {
     const _ASSERT_SLOT_LEN_IS_AT_LEAST_TWO: () = assert!(Self::SLOTS_LEN >= 2);
     const _ASSERT_SLOT_SIZE_DOES_NOT_OVERFLOW: () = {
         let buf_start = offset_of!(UntypedSlab, buf);
-        assert!(buf_start + Self::SLOTS_START + Self::SLOT_SIZE <= SLAB_PAGE.usize());
+        assert!(
+            buf_start + Self::SLOTS_START + (Self::SLOTS_LEN * Self::SLOT_SIZE)
+                <= SLAB_PAGE.usize()
+        );
     };
 
     fn map(&self) -> &BitSlice<u64, Lsb0> { &self.inner.bitmap[0..Self::SLOTS_LEN] }
@@ -367,7 +380,7 @@ impl<T: Item> Slab<T> {
         let slots_start = slots_start.cast::<MaybeUninit<T>>();
         // SAFETY: We have immutable reference over the slab from the function
         // parameter. &raw buf + SLOTS_START + SLOT_SIZE does not overflow.
-        unsafe { slice::from_raw_parts(slots_start, Self::SLOT_SIZE) }
+        unsafe { slice::from_raw_parts(slots_start, Self::SLOTS_LEN) }
     }
 
     fn slots_mut(&mut self) -> &mut [MaybeUninit<T>] {
@@ -377,7 +390,7 @@ impl<T: Item> Slab<T> {
         let slots_start = slots_start.cast::<MaybeUninit<T>>();
         // SAFETY: We have immutable reference over the slab from the function
         // parameter. &raw buf + SLOTS_START + SLOT_SIZE does not overflow.
-        unsafe { slice::from_raw_parts_mut(slots_start, Self::SLOT_SIZE) }
+        unsafe { slice::from_raw_parts_mut(slots_start, Self::SLOTS_LEN) }
     }
 
     fn is_empty(&self) -> bool { matches!(self.fill_level(), SlabFillLevel::Empty) }
@@ -420,6 +433,10 @@ impl<T: Item> Slab<T> {
         debug_assert!(idx < Self::SLOTS_LEN);
         // SAFETY: idx was returned from first_zero
         unsafe { map.replace_unchecked(idx, true) };
+        info!(
+            "Slab start: {:#x}, idx: {}",
+            self as *mut Self as usize, idx
+        );
 
         self.inner.free_cnt -= 1;
         let uninit = &mut self.slots_mut()[idx];
@@ -435,13 +452,19 @@ impl<T: Item> Slab<T> {
             .contains(&ptr.as_ptr().cast()));
 
         // SAFETY: The ptr was reserved from this slab as guarenteed by caller.
-        let idx = unsafe { ptr.as_ptr().offset_from(self.slots().as_ptr().cast()) };
-        let idx = idx as usize;
-
+        let idx: isize = unsafe { ptr.as_ptr().offset_from(self.slots().as_ptr().cast()) };
+        let idx: usize = idx.try_into().unwrap();
+        info!(
+            "Slab start: {:#x}, idx: {}",
+            self as *mut Self as usize, idx
+        );
         debug_assert!(self.map()[idx]);
         // SAFETY: Since ptr is within bound, its offset from beginning of
         // slots should be within bound as well.
         unsafe { self.map_mut().replace_unchecked(idx, false) };
+
+
+
         self.inner.free_cnt += 1;
     }
 

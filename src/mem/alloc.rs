@@ -46,6 +46,11 @@ unsafe impl Allocator for GlobalAllocator {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        info!(
+            "Deallocating for size: {:#x}, align: {:#x}",
+            layout.size(),
+            layout.align()
+        );
         info!("Deallocating {:?}", ptr);
         let layout = layout.pad_to_align();
         if layout.size() <= SlabAllocator::MAX_SIZE {

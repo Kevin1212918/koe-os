@@ -1,11 +1,15 @@
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::sync::Arc;
+use core::borrow::Borrow;
 
 use crate::fs::vfs::Vfs;
 
 mod elf;
 mod ustar;
 mod vfs;
+
+pub use elf::load_elf;
 
 pub static FS: spin::Mutex<Vfs> = spin::Mutex::new(Vfs::new());
 
@@ -16,12 +20,12 @@ pub fn init_initrd(rd: Box<[u8]>) {
 
 pub trait FileSystem: Send + Sync {
     fn root(&self) -> Rc<dyn INode>;
-    fn resolve(&self, path: &str) -> Option<Rc<dyn INode>>;
+    fn resolve(&self, path: &str) -> Option<Arc<dyn INode>>;
 }
 
-pub trait INode {
+pub trait INode: Send + Sync {
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
-    // fn stat(&self) -> Stat;
+    fn stat(&self) -> Stat;
     // fn lookup(&self, name: &str) -> Option<Rc<dyn INode>>;
 }
 
@@ -31,14 +35,18 @@ pub enum Error {
     Unknown,
 }
 
-struct Stat {}
+pub struct Stat {
+    pub size: usize,
+}
 
-/// A per-process file handle backed by a vfs inode.
+/// A file handle backed by a vfs inode.
 pub struct File {
     pos: usize,
-    inode: Rc<dyn INode>,
+    inode: Arc<dyn INode>,
 }
 impl File {
+    pub fn inode(&self) -> &dyn INode { self.inode.borrow() }
+
     pub fn open(path: &str) -> Option<Self> {
         let inode = FS.lock().resolve(path)?;
         Some(Self { pos: 0, inode })

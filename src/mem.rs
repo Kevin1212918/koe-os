@@ -25,6 +25,7 @@ use crate::common::Privilege;
 
 const KERNEL_OFFSET_VMA: usize = 0xFFFFFFFF80000000;
 
+pub use arch::MMU;
 
 extern "C" {
     static _KERNEL_START_VMA: u8;
@@ -66,4 +67,4 @@ pub fn kernel_size() -> usize {
         .expect("kernel_end_vma should be larger than kernel_start_vma")
 }
 
-pub type Paging = paging::MapRef<MemoryMap>;
+pub type Paging = paging::MemoryMapRef<MemoryMap>;
