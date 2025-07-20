@@ -4,6 +4,7 @@ pub use mac::*;
 
 use crate::drivers::serial;
 use crate::drivers::vga::{Color, VGA_BUFFER};
+use crate::interrupt::IntrptGuard;
 pub mod mac {
     macro_rules! ok {
         ($($arg:tt)*) => {
@@ -33,6 +34,7 @@ pub fn panic(msg: Arguments) { log("PANIC!", Color::Purple, msg); }
 
 
 fn log(header: &'static str, color: Color, msg: Arguments) {
+    let _intrpt = IntrptGuard::new();
     log_vga(header, color, msg);
     log_serial(header, color, msg);
 }

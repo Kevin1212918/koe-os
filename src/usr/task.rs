@@ -74,6 +74,8 @@ fn task_entry() {
     let task = task_map.get_mut(&tid).expect("Race condition strikes!");
     let instr_ptr = load_elf(task, 0).expect("Elf loading failed");
     let stack_ptr = STACK_BASE;
+    drop(task_map);
+
     unsafe { enter_usr(stack_ptr, instr_ptr) };
 }
 
@@ -81,7 +83,7 @@ pub fn switch_task(next_task: &KThread) {
     // FIXME: deadlock on MMU lock
     let stack_base = next_task.stack_base();
     unsafe { set_kernel_entry_stack(stack_base as usize, None) };
-    let mut task_map = TASK_MAP.lock();
+    let task_map = TASK_MAP.lock();
     let cpu_id = KThread::my_cpu_id();
     let task = task_map.get(&next_task.tid()).unwrap();
     task.mmap.activate(cpu_id);

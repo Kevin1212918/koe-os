@@ -37,4 +37,4 @@ impl Drop for IntrptGuard {
 }
 
 /// Per-CPU tracker for the number of interrupt guard in the kernel.
-static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(0);
+static INTERRUPT_GUARD_CNT: AtomicUsize = AtomicUsize::new(1);

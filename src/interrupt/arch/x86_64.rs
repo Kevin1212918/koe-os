@@ -19,7 +19,8 @@ pub fn init() {
     pic::mask_all();
     pic::unmask(0);
     pic::unmask(1);
-    enable_interrupt();
+    // SAFETY: Reclaiming the initial interrupt lock
+    unsafe { IntrptGuard::reclaim() };
 }
 
 pub fn enable_interrupt() {

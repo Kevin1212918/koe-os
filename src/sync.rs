@@ -2,6 +2,7 @@ use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 
+pub mod base;
 pub mod spin;
 
 unsafe impl<T> Sync for InitCell<T> where T: Sync {}

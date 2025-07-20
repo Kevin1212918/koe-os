@@ -34,7 +34,10 @@ pub fn init() {
     unsafe {
         asm!(
             "lgdt [{gdtr}]",
-            gdtr = in(reg) &gdtr as *const Gdtr
+            "mov r11w, 0x28 | 3",
+            "ltr r11w",
+            gdtr = in(reg) &gdtr as *const Gdtr,
+            out("r11w") _
         )
     };
 }
@@ -44,6 +47,7 @@ static KERNEL_ENTRY_STACK_PTR: Atomic<StackPtr> = Atomic::new(0);
 static TSS: SyncUnsafeCell<Tss> = const {
     let mut arr = [0; 26];
     arr[0] = size_of::<Tss>() as u32;
+    arr[25] = size_of::<Tss>() as u32;
     SyncUnsafeCell::new(Tss(arr))
 };
 #[repr(C)]
@@ -56,6 +60,10 @@ impl Tss {
 
         self.0[1] = sp_low;
         self.0[2] = sp_hi;
+        self.0[3] = sp_low;
+        self.0[4] = sp_hi;
+        self.0[5] = sp_low;
+        self.0[6] = sp_hi;
     }
 }
 
@@ -133,7 +141,7 @@ impl SegmentDesc {
 
     fn tss() -> [Self; 2] {
         let mut tss_base: u64 = TSS.get() as u64;
-        let tss_limit: u16 = size_of::<Tss>() as u16;
+        let tss_limit: u16 = size_of::<Tss>() as u16 - 1;
         let mut low = 0u64;
         let view = low.view_bits_mut::<Lsb0>();
         view[Self::ACCESS].store_le(0x89);
